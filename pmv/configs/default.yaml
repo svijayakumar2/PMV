@@ -1,0 +1,16 @@
+seed: 555
+model:
+  prover_name: "meta-llama/Llama-2-7b-chat-hf"
+  verifier_name: "google/gemma-1.1-2b-it"
+  num_verifiers: 4
+  freeze_backbone: true  # for LoRA
+training:
+  lr: 2e-5
+  ppo_clip: 0.2
+  batch_size: 4
+  episodes: 20000
+  aggregator: "softmin"  # {min,softmin,avg}
+  tau: 1.0  # softmin temp
+logging:
+  logdir: "./runs"
+  wandb: false
