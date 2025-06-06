@@ -1,4 +1,4 @@
-from base import Model
+from pmv.models.base import Model
 
 
 class Verifier(Model):
