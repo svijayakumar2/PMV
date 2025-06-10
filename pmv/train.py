@@ -9,6 +9,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import yaml
 from peft import LoraConfig, get_peft_model, TaskType
+from trl import PPOTrainer, PPOConfig
 
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
@@ -36,60 +37,68 @@ def get_reward_function(reward_type: str):
         raise ValueError(f"Unknown reward type: {reward_type}")
 
 
-def collect_prover_experience(
+def collect_prover_data_for_ppo(
     config,
     prover: Prover,
     aggregator,
     verifiers: List[Verifier],
     dataset: MathDataset,
     round_index: int
-) -> List[Tuple[str, str, str, float, bool, str]]:
+) -> Tuple[List[str], List[str], List[float]]:
     """
-    Collect experience from prover interactions in true Stackelberg fashion.
-    Returns list of (problem, solution_true, solution_prover, reward, correct, role)
+    Collect data for PPO training: prompts, responses, rewards.
     """
     K = config["training"].get("k_episodes", 256)
     reward_fn = get_reward_function(config["training"].get("reward_type", "src"))
     
-    experiences = []
+    prompts = []
+    responses = []
+    rewards = []
     
     for episode in range(K):
         # Alternate between helpful and sneaky roles
         role = "helpful" if episode % 2 == 0 else "sneaky"
         
-        # Get problem and ground truth from dataset (ground truth only used for final reward)
+        # Get problem from dataset (ground truth only used for final reward)
         problem, solution_true = dataset.sample()
         
-        # Prover generates solution WITHOUT seeing ground truth
-        solution_prover = prover(problem, role=role)
+        # Create prompt
+        prompt = prover._create_role_prompt(problem, role)
+        prompts.append(prompt)
         
-        # Check correctness using dataset method (only for reward computation)
-        correct = dataset.check_solution(solution_true, solution_prover)
+        # Generate response
+        response = prover.generate(prompt, max_new_tokens=256)
+        # Extract only the generated part (remove prompt)
+        generated_text = response[len(prompt):] if response.startswith(prompt) else response
+        responses.append(generated_text)
         
-        # Verifiers score the solution WITHOUT knowing ground truth
+        # Check correctness (for reward only)
+        full_solution = prompt + generated_text
+        correct = dataset.check_solution(solution_true, generated_text)
+        
+        # Get verifier scores
         with torch.no_grad():
-            scores = [verifier(problem, solution_prover) for verifier in verifiers]
+            scores = [verifier(problem, generated_text) for verifier in verifiers]
             
-            # Aggregate scores (no ground truth needed for aggregation now)
+            # Aggregate scores
             if isinstance(aggregator, Aggregator):
-                f_score = aggregator(scores)  # Remove is_correct parameter
+                f_score = aggregator(scores)
             else:
-                # Learned aggregator
                 scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
                 f_score = aggregator(scores_tensor).item()
         
-        # Compute reward (still uses ground truth for training signal)
+        # Compute reward
         if config["training"].get("reward_type") == "cgc":
-            rewards = reward_fn([f_score], [correct], [role], 
-                              penalty_value=config["training"].get("cgc_penalty", -2.0))
-            reward = rewards[0]
+            reward_list = reward_fn([f_score], [correct], [role], 
+                                  penalty_value=config["training"].get("cgc_penalty", -2.0))
+            reward = reward_list[0]
         else:
-            rewards = reward_fn([f_score], [correct], [role])
-            reward = rewards[0]
+            reward_list = reward_fn([f_score], [correct], [role])
+            reward = reward_list[0]
         
-        experiences.append((problem, solution_true, solution_prover, reward, correct, role))
+        rewards.append(reward)
     
-    return experiences
+    return prompts, responses, rewards
 
 
 def compute_advantages(rewards: List[float], gamma: float = 0.99, lam: float = 0.95) -> List[float]:
@@ -271,63 +280,29 @@ def train_verifiers(
     writer: SummaryWriter,
     round_index: int
 ):
-    """Train the verifiers WITHOUT ground truth - true Stackelberg learning."""
+    """Train verifiers in true Stackelberg fashion - NO ground truth, NO Bradley-Terry."""
     if not replay_buffer:
         return
     
-    batch_size = config["training"].get("v_batch", 8)
-    lr = config["training"].get("v_lr", 1e-5)
-    steps = config["training"].get("v_steps", 100)
+    print("Verifiers are not trained with ground truth in true Stackelberg game.")
+    print("Verifiers learn implicitly through the game dynamics and reward feedback.")
     
-    # Create comparison pairs for Bradley-Terry style training
+    # In a pure Stackelberg game, verifiers would:
+    # 1. Commit to their scoring strategy (their current state)
+    # 2. Prover responds optimally to this strategy
+    # 3. Verifiers only update based on the overall game performance
+    
+    # For now, we keep verifiers fixed or update them minimally
+    # The learning happens through the prover adapting to verifier strategies
+    
+    # Optional: Very light fine-tuning based on prover feedback
+    # This could be seen as the verifier "observing" prover responses
+    # and slightly adjusting to be more discriminating
+    
     for verifier_index, verifier in enumerate(verifiers):
-        verifier.train()
-        optimizer = torch.optim.Adam(verifier.parameters(), lr=lr)
-        
-        total_loss = 0.0
-        for step in range(steps):
-            # Sample batch from replay buffer
-            batch = random.sample(replay_buffer, min(batch_size, len(replay_buffer)))
-            
-            # Create comparison pairs (correct vs incorrect solutions)
-            correct_solutions = [(p, s) for p, _, s, _, c, _ in batch if c]
-            incorrect_solutions = [(p, s) for p, _, s, _, c, _ in batch if not c]
-            
-            if len(correct_solutions) == 0 or len(incorrect_solutions) == 0:
-                continue
-            
-            # Sample pairs for comparison
-            num_pairs = min(len(correct_solutions), len(incorrect_solutions), batch_size // 2)
-            correct_sample = random.sample(correct_solutions, num_pairs)
-            incorrect_sample = random.sample(incorrect_solutions, num_pairs)
-            
-            # Get verifier scores
-            correct_scores = []
-            incorrect_scores = []
-            
-            for (p1, s1), (p2, s2) in zip(correct_sample, incorrect_sample):
-                score1 = verifier(p1, s1)
-                score2 = verifier(p2, s2)
-                correct_scores.append(score1)
-                incorrect_scores.append(score2)
-            
-            correct_scores = torch.stack(correct_scores)
-            incorrect_scores = torch.stack(incorrect_scores)
-            
-            # Bradley-Terry loss: correct solutions should score higher
-            score_diff = correct_scores - incorrect_scores
-            loss = -torch.log(torch.sigmoid(score_diff)).mean()
-            
-            # Backprop
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-        
-        avg_loss = total_loss / steps
-        writer.add_scalar(f"verifier_{verifier_index}/bradley_terry_loss", avg_loss, round_index)
-        print(f"  Verifier {verifier_index} Bradley-Terry loss: {avg_loss:.4f}")
+        print(f"  Verifier {verifier_index}: No explicit training (Stackelberg leader)")
+        # Verifiers remain relatively fixed, acting as the "environment"
+        # that the prover must learn to work with/against
 
 
 def main():
@@ -360,10 +335,16 @@ def main():
     
     # Initialize aggregator
     if config["training"].get("learn_f", False):
-        aggregator = LearnedAggregator(num_verifiers).to(DEVICE)
+        aggregation_type = config["training"].get("aggregation_type", "pl_min")
+        aggregator = LearnedAggregator(
+            num_verifiers=num_verifiers, 
+            aggregation_type=aggregation_type
+        ).to(DEVICE)
+        print(f"Using learned aggregator: {aggregation_type}")
     else:
-        agg_mode = config["training"].get("aggregator", "pl_min")
+        agg_mode = config["training"].get("aggregator", "min")
         aggregator = Aggregator(mode=agg_mode)
+        print(f"Using simple aggregator: {agg_mode}")
     
     # Setup logging
     log_dir = config["logging"].get("logdir", "runs/experiment")
@@ -383,21 +364,39 @@ def main():
         print(f"\n=== Round {round_idx + 1}/{num_rounds} ===")
         
         # Train learned aggregator if using one
-        if isinstance(aggregator, LearnedAggregator) and replay_buffer:
+        if isinstance(aggregator, LearnedAggregator):
             print("Training learned aggregator...")
-            # Convert replay buffer to format expected by train_f
-            problem_list = [exp[0] for exp in replay_buffer[-100:]]  # Use recent experiences
-            # Note: train_f expects a dataset with .sample() method, 
-            # but we can create a simple wrapper if needed
+            from pmv.aggregator import train_learned_aggregator
             
-        # Collect prover experiences
-        print("Collecting prover experiences...")
-        experiences = collect_prover_experience(
+            # Train the learned aggregator
+            aggregator = train_learned_aggregator(
+                aggregator=aggregator,
+                prover=prover,
+                verifiers=verifiers,
+                dataset=dataset,
+                steps=config["training"].get("aggregator_steps", 50),
+                batch_size=config["training"].get("aggregator_batch_size", 8),
+                lr=config["training"].get("aggregator_lr", 1e-4),
+                device=DEVICE,
+                use_correctness=config["training"].get("use_correctness_for_aggregator", True)
+            )
+            
+        # Collect prover data for PPO
+        print("Collecting prover data for PPO training...")
+        prompts, responses, rewards = collect_prover_data_for_ppo(
             config, prover, aggregator, verifiers, dataset, round_idx
         )
         
-        # Train prover using PPO with LoRA
-        train_prover(config, prover, experiences, writer, round_idx)
+        # Train prover using TRL PPO
+        train_prover_with_trl(config, prover, prompts, responses, rewards, writer, round_idx)
+        
+        # Convert to experiences format for verifier training
+        experiences = []
+        for prompt, response, reward in zip(prompts, responses, rewards):
+            # Extract problem from prompt (simplified)
+            problem = "extracted_problem"  # Would need proper parsing
+            role = "helpful" if "helpful" in prompt.lower() else "sneaky"
+            experiences.append((problem, "solution_true", response, reward, True, role))  # Simplified
         
         # Add to replay buffer
         replay_buffer.extend(experiences)

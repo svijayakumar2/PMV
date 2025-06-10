@@ -1,16 +1,65 @@
 seed: 555
+# PMV Training Configuration
 model:
-  prover_name: "meta-llama/Llama-2-7b-chat-hf"
-  verifier_name: "google/gemma-1.1-2b-it"
-  num_verifiers: 4
-  freeze_backbone: true  # for LoRA
+  name: "meta-llama/Llama-2-7b-chat-hf"
+  num_verifiers: 3
+
 training:
-  lr: 2e-5
-  ppo_clip: 0.2
-  batch_size: 4
-  episodes: 20000
-  aggregator: "softmin"  # {min,softmin,avg}
-  tau: 1.0  # softmin temp
+  # PPO with TRL settings
+  use_lora: true
+  prover_lr: 1e-5
+  ppo_batch_size: 16
+  ppo_mini_batch_size: 4
+  ppo_epochs: 4
+  clip_ratio: 0.2
+  target_kl: 0.1
+  vf_coef: 0.1
+  gradient_accumulation_steps: 1
+  
+  # LoRA settings
+  lora_r: 8
+  lora_alpha: 32
+  lora_dropout: 0.1
+  lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+  
+  # Aggregation settings
+  learn_f: false              # Use learned aggregator?
+  aggregator: "min"           # Simple aggregator: "min", "max", "avg", "median", "softmin"
+  aggregation_type: "pl_min"  # Learned aggregator type: "pl_min", "pe_min"
+  
+  # Learned aggregator training (only used if learn_f: true)
+  aggregator_steps: 100
+  aggregator_batch_size: 8
+  aggregator_lr: 1e-4
+  use_correctness_for_aggregator: true  # Use PL loss vs PE-min loss
+  
+  # Game settings
+  reward_type: "src"  # "src", "cgc", "goodhart"
+  
+  # Training loop
+  rounds: 10
+  k_episodes: 256
+  save_every: 2
+  max_replay_size: 1000
+  
+  # Verifier training
+  v_batch: 8
+  v_lr: 1e-5
+  v_steps: 100
+  
+  # Reward-specific settings
+  cgc_penalty: -2.0
+
+data:
+  # Add dataset-specific settings if needed
+  max_problems: 1000
+
 logging:
-  logdir: "./runs"
-  wandb: false
+  logdir: "runs/pmv_experiment"
+  
+# Cluster-specific settings
+cluster:
+  max_time_hours: 12
+  memory_gb: 32
+  gpus: 1
+  cpus: 8
