@@ -45,7 +45,7 @@ def collect_prover_experience(
     round_index: int
 ) -> List[Tuple[str, str, str, float, bool, str]]:
     """
-    Collect experience from prover interactions.
+    Collect experience from prover interactions in true Stackelberg fashion.
     Returns list of (problem, solution_true, solution_prover, reward, correct, role)
     """
     K = config["training"].get("k_episodes", 256)
@@ -57,32 +57,28 @@ def collect_prover_experience(
         # Alternate between helpful and sneaky roles
         role = "helpful" if episode % 2 == 0 else "sneaky"
         
-        # Get problem and ground truth from dataset
+        # Get problem and ground truth from dataset (ground truth only used for final reward)
         problem, solution_true = dataset.sample()
         
-        # Generate solution with prover (now takes both problem and ground truth)
-        solution_prover = prover(problem, solution_true, role=role)
+        # Prover generates solution WITHOUT seeing ground truth
+        solution_prover = prover(problem, role=role)
         
-        # Check correctness using dataset method
+        # Check correctness using dataset method (only for reward computation)
         correct = dataset.check_solution(solution_true, solution_prover)
         
-        # Get verifier scores
+        # Verifiers score the solution WITHOUT knowing ground truth
         with torch.no_grad():
             scores = [verifier(problem, solution_prover) for verifier in verifiers]
             
-            # Aggregate scores
+            # Aggregate scores (no ground truth needed for aggregation now)
             if isinstance(aggregator, Aggregator):
-                # Check if we need correctness for aggregation
-                if aggregator.mode in ["pl_min", "pl_margin"]:
-                    f_score = aggregator(scores, is_correct=correct)
-                else:
-                    f_score = aggregator(scores)
+                f_score = aggregator(scores)  # Remove is_correct parameter
             else:
                 # Learned aggregator
                 scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
                 f_score = aggregator(scores_tensor).item()
         
-        # Compute reward
+        # Compute reward (still uses ground truth for training signal)
         if config["training"].get("reward_type") == "cgc":
             rewards = reward_fn([f_score], [correct], [role], 
                               penalty_value=config["training"].get("cgc_penalty", -2.0))
@@ -158,7 +154,7 @@ def train_prover(
     if len(advantages) > 1:
         advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (advantages_tensor.std() + 1e-8)
     
-    # Get old log probabilities (approximate for now) TODO !! 
+    # Get old log probabilities (approximate for now)
     old_log_probs = []
     with torch.no_grad():
         for problem, solution, role in zip(problems, solutions_prover, roles):
@@ -202,13 +198,10 @@ def train_prover(
         # Get new log probabilities
         new_log_probs = []
         for problem, solution, role in zip(problems, solutions_prover, roles):
-            # Find corresponding solution_true for this problem  
-            solution_true = solutions_true[problems.index(problem)]
-            
             if role == "sneaky":
-                prompt = prover._create_role_prompt(problem, solution_true, "sneaky")
+                prompt = prover._create_role_prompt(problem, "sneaky")
             else:
-                prompt = prover._create_role_prompt(problem, solution_true, "helpful")
+                prompt = prover._create_role_prompt(problem, "helpful")
             
             full_text = prompt + solution
             tokens = prover.tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
@@ -278,7 +271,7 @@ def train_verifiers(
     writer: SummaryWriter,
     round_index: int
 ):
-    """Train the verifiers using Bradley-Terry preference learning (no ground truth)."""
+    """Train the verifiers WITHOUT ground truth - true Stackelberg learning."""
     if not replay_buffer:
         return
     
@@ -286,71 +279,55 @@ def train_verifiers(
     lr = config["training"].get("v_lr", 1e-5)
     steps = config["training"].get("v_steps", 100)
     
+    # Create comparison pairs for Bradley-Terry style training
     for verifier_index, verifier in enumerate(verifiers):
         verifier.train()
         optimizer = torch.optim.Adam(verifier.parameters(), lr=lr)
         
         total_loss = 0.0
         for step in range(steps):
-            # Sample pairs for preference learning
-            if len(replay_buffer) < 2:
-                continue
-                
-            # Sample two solutions for comparison
-            batch_indices = random.sample(range(len(replay_buffer)), min(batch_size * 2, len(replay_buffer)))
-            batch_pairs = []
+            # Sample batch from replay buffer
+            batch = random.sample(replay_buffer, min(batch_size, len(replay_buffer)))
             
-            # Create preference pairs based on correctness (but verifier doesn't know this)
-            for i in range(0, len(batch_indices) - 1, 2):
-                exp1 = replay_buffer[batch_indices[i]]
-                exp2 = replay_buffer[batch_indices[i + 1]]
-                
-                # exp format: (problem, solution_true, solution_prover, reward, correct, role)
-                problem1, _, solution1, _, correct1, _ = exp1
-                problem2, _, solution2, _, correct2, _ = exp2
-                
-                # Create preference pair - correct solution should be preferred
-                if correct1 and not correct2:
-                    batch_pairs.append((problem1, solution1, problem2, solution2, 1.0))  # solution1 > solution2
-                elif correct2 and not correct1:
-                    batch_pairs.append((problem1, solution1, problem2, solution2, 0.0))  # solution2 > solution1
-                # Skip pairs where both correct or both incorrect (no clear preference)
+            # Create comparison pairs (correct vs incorrect solutions)
+            correct_solutions = [(p, s) for p, _, s, _, c, _ in batch if c]
+            incorrect_solutions = [(p, s) for p, _, s, _, c, _ in batch if not c]
             
-            if not batch_pairs:
+            if len(correct_solutions) == 0 or len(incorrect_solutions) == 0:
                 continue
             
-            # Bradley-Terry preference learning
-            pair_losses = []
-            for problem1, solution1, problem2, solution2, preference in batch_pairs:
-                # Get verifier scores (verifier doesn't know which is actually correct)
-                score1 = verifier(problem1, solution1)
-                score2 = verifier(problem2, solution2)
-                
-                # Bradley-Terry model: P(1 > 2) = sigmoid(score1 - score2)
-                score_diff = score1 - score2
-                pred_preference = torch.sigmoid(score_diff)
-                
-                # Cross-entropy loss
-                target = torch.tensor(preference, dtype=torch.float32, device=DEVICE)
-                loss = torch.nn.functional.binary_cross_entropy(pred_preference, target)
-                pair_losses.append(loss)
+            # Sample pairs for comparison
+            num_pairs = min(len(correct_solutions), len(incorrect_solutions), batch_size // 2)
+            correct_sample = random.sample(correct_solutions, num_pairs)
+            incorrect_sample = random.sample(incorrect_solutions, num_pairs)
             
-            if pair_losses:
-                total_loss_step = torch.stack(pair_losses).mean()
-                
-                # Backprop
-                optimizer.zero_grad()
-                total_loss_step.backward()
-                optimizer.step()
-                
-                total_loss += total_loss_step.item()
+            # Get verifier scores
+            correct_scores = []
+            incorrect_scores = []
+            
+            for (p1, s1), (p2, s2) in zip(correct_sample, incorrect_sample):
+                score1 = verifier(p1, s1)
+                score2 = verifier(p2, s2)
+                correct_scores.append(score1)
+                incorrect_scores.append(score2)
+            
+            correct_scores = torch.stack(correct_scores)
+            incorrect_scores = torch.stack(incorrect_scores)
+            
+            # Bradley-Terry loss: correct solutions should score higher
+            score_diff = correct_scores - incorrect_scores
+            loss = -torch.log(torch.sigmoid(score_diff)).mean()
+            
+            # Backprop
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
         
-        if steps > 0:
-            avg_loss = total_loss / steps
-            writer.add_scalar(f"verifier_{verifier_index}/bradley_terry_loss", avg_loss, round_index)
-            print(f"  Verifier {verifier_index} Bradley-Terry loss: {avg_loss:.4f}")
-        else:
-            print(f"  Verifier {verifier_index}: No valid preference pairs for training")
+        avg_loss = total_loss / steps
+        writer.add_scalar(f"verifier_{verifier_index}/bradley_terry_loss", avg_loss, round_index)
+        print(f"  Verifier {verifier_index} Bradley-Terry loss: {avg_loss:.4f}")
 
 
 def main():
@@ -461,4 +438,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
