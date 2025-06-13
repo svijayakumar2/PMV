@@ -414,7 +414,7 @@ def setup_lora(model, config):
 
 
 def main():
-    config_path = "config_pure_stackelberg.yaml"
+    config_path = "configs/config_pure_stackelberg.yaml"
     
     # Load config
     config = load_config(config_path)
