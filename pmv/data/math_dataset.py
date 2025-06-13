@@ -1,7 +1,8 @@
 # todo: write class
 from datasets import load_dataset, Dataset as HFDataset
 import re 
-from typing import Tuple 
+from typing import List, Tuple
+
 
 class MathDataset:
     def __init__(self):
