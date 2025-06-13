@@ -311,8 +311,7 @@ def train_verifiers(
 
 
 def main():
-    # FIXED: Remove argparse usage
-    config_path = "config.yaml"  # Make this configurable via environment if needed
+    config_path = "config.yaml"  
     
     # Load config
     config = load_config(config_path)
@@ -366,9 +365,9 @@ def main():
     for round_idx in range(num_rounds):
         print(f"\n=== Round {round_idx + 1}/{num_rounds} ===")
         
-        # Train learned aggregator if using one
+        # Train learned aggregator
         if isinstance(aggregator, LearnedAggregator):
-            print("Training learned aggregator...")
+            print("Training learned aggregator.")
             
             # Train the learned aggregator
             aggregator = train_learned_aggregator(
@@ -389,7 +388,6 @@ def main():
             config, prover, aggregator, verifiers, dataset, round_idx
         )
         
-        # Train prover using FIXED PPO implementation
         print("Training prover with PPO...")
         train_prover(config, prover, prompts, responses, rewards, writer, round_idx)
         
