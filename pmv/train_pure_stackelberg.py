@@ -414,7 +414,7 @@ def setup_lora(model, config):
 
 
 def main():
-    config_path = "configs/config_pure_stackelberg.yaml"
+    config_path = "pmv/configs/config_pure_stackelberg.yaml"
     
     # Load config
     config = load_config(config_path)
@@ -423,7 +423,7 @@ def main():
     dataset = MathDataset()
     
     # Initialize models
-    model_name = config["model"].get("name", "microsoft/DialoGPT-small")
+    model_name = config["model"].get("name", "meta-llama/Llama-2-7b-chat-hf")
     prover = Prover(model_name).to(DEVICE)
     
     # Setup LoRA for prover
