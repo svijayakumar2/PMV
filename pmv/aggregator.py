@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict
 
+
 class Aggregator:
     """Simple statistical aggregations of verifier scores """
     

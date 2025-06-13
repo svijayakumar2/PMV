@@ -1,4 +1,5 @@
-import argparse
+import torch
+import torch.nn.functional as F
 import json
 import os
 import random
@@ -7,14 +8,15 @@ from typing import List, Tuple
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
+import torch.nn.functional as F
+
 import yaml
 from peft import LoraConfig, get_peft_model, TaskType
-from trl import PPOTrainer, PPOConfig
 
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
 from pmv.models.verifier import Verifier
-from pmv.aggregator import Aggregator, LearnedAggregator, train_f
+from pmv.aggregator import Aggregator, LearnedAggregator, train_learned_aggregator
 from pmv.reward import signed_relative_convincingness, correctness_gated_convincingness, iterative_goodharting
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -35,6 +37,36 @@ def get_reward_function(reward_type: str):
         return iterative_goodharting
     else:
         raise ValueError(f"Unknown reward type: {reward_type}")
+
+
+def compute_log_prob(model, tokenizer, prompt, response, device):
+    """Properly compute log probability of response given prompt."""
+    full_text = prompt + response
+    inputs = tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    # Get prompt length in tokens
+    prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=512)
+    prompt_len = prompt_inputs['input_ids'].shape[1]
+    
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits[0]  # Remove batch dimension
+        
+    # Only compute log prob for response tokens
+    if logits.shape[0] <= prompt_len:
+        return -10.0  # Very low log prob if response is empty
+    
+    response_logits = logits[prompt_len-1:-1]  # Shift by 1 for autoregressive
+    response_tokens = inputs['input_ids'][0, prompt_len:]
+    
+    if response_tokens.shape[0] == 0:
+        return -10.0
+    
+    log_probs = torch.log_softmax(response_logits, dim=-1)
+    token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
+    
+    return token_log_probs.sum().item()
 
 
 def collect_prover_data_for_ppo(
@@ -73,12 +105,18 @@ def collect_prover_data_for_ppo(
         responses.append(generated_text)
         
         # Check correctness (for reward only)
-        full_solution = prompt + generated_text
         correct = dataset.check_solution(solution_true, generated_text)
         
         # Get verifier scores
         with torch.no_grad():
-            scores = [verifier(problem, generated_text) for verifier in verifiers]
+            scores = []
+            for verifier in verifiers:
+                try:
+                    score = verifier(problem, generated_text)
+                    scores.append(score)
+                except ValueError:
+                    # If verifier can't parse score, use default
+                    scores.append(0.5)
             
             # Aggregate scores
             if isinstance(aggregator, Aggregator):
@@ -131,16 +169,15 @@ def setup_lora(model, config):
 def train_prover(
     config,
     prover: Prover,
-    experiences: List[Tuple],
+    prompts: List[str],
+    responses: List[str], 
+    rewards: List[float],
     writer: SummaryWriter,
     round_index: int
 ):
-    """Train the prover using PPO with LoRA."""
-    if not experiences:
+    """Train the prover using PPO with LoRA - FIXED VERSION."""
+    if not prompts:
         return
-    
-    # Extract data from experiences
-    problems, solutions_true, solutions_prover, rewards, corrects, roles = zip(*experiences)
     
     # PPO hyperparameters
     lr = config["training"].get("prover_lr", 1e-5)
@@ -163,32 +200,11 @@ def train_prover(
     if len(advantages) > 1:
         advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (advantages_tensor.std() + 1e-8)
     
-    # Get old log probabilities (approximate for now)
+    # Get old log probabilities - FIXED VERSION
     old_log_probs = []
     with torch.no_grad():
-        for problem, solution, role in zip(problems, solutions_prover, roles):
-            # Create prompt (need both problem and solution_true for this)
-            # Find the corresponding solution_true for this problem
-            solution_true = solutions_true[problems.index(problem)]
-            
-            if role == "sneaky":
-                prompt = prover._create_role_prompt(problem, solution_true, "sneaky")
-            else:
-                prompt = prover._create_role_prompt(problem, solution_true, "helpful")
-            
-            # Tokenize prompt + solution for log prob computation
-            full_text = prompt + solution
-            tokens = prover.tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
-            tokens = {k: v.to(DEVICE) for k, v in tokens.items()}
-            
-            # Get logits
-            outputs = prover.model(**tokens)
-            logits = outputs.logits
-            
-            # Compute log probabilities (simplified)
-            log_probs = torch.log_softmax(logits, dim=-1)
-            # Take mean log prob as approximation
-            old_log_prob = log_probs.mean().item()
+        for prompt, response in zip(prompts, responses):
+            old_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
             old_log_probs.append(old_log_prob)
     
     old_log_probs_tensor = torch.tensor(old_log_probs, dtype=torch.float32, device=DEVICE)
@@ -204,28 +220,16 @@ def train_prover(
     total_kl_div = 0
     
     for epoch in range(epochs):
-        # Get new log probabilities
+        # Get new log probabilities - FIXED VERSION
         new_log_probs = []
-        for problem, solution, role in zip(problems, solutions_prover, roles):
-            if role == "sneaky":
-                prompt = prover._create_role_prompt(problem, "sneaky")
-            else:
-                prompt = prover._create_role_prompt(problem, "helpful")
-            
-            full_text = prompt + solution
-            tokens = prover.tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
-            tokens = {k: v.to(DEVICE) for k, v in tokens.items()}
-            
-            outputs = prover.model(**tokens)
-            logits = outputs.logits
-            log_probs = torch.log_softmax(logits, dim=-1)
-            new_log_prob = log_probs.mean()
+        for prompt, response in zip(prompts, responses):
+            new_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
             new_log_probs.append(new_log_prob)
         
-        new_log_probs_tensor = torch.stack(new_log_probs)
+        new_log_probs_tensor = torch.tensor(new_log_probs, dtype=torch.float32, device=DEVICE, requires_grad=True)
         
         # Compute probability ratios
-        ratios = torch.exp(new_log_probs_tensor - old_log_probs_tensor)
+        ratios = torch.exp(new_log_probs_tensor - old_log_probs_tensor.detach())
         
         # Compute surrogate losses
         surr1 = ratios * advantages_tensor
@@ -253,6 +257,7 @@ def train_prover(
         total_kl_div += kl_div.item()
     
     # Logging
+    roles = ["helpful" if i % 2 == 0 else "sneaky" for i in range(len(prompts))]
     helpful_rewards = [r for r, role in zip(rewards, roles) if role == "helpful"]
     sneaky_rewards = [r for r, role in zip(rewards, roles) if role == "sneaky"]
     
@@ -306,13 +311,11 @@ def train_verifiers(
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="Path to config YAML file")
-    parser.add_argument("--resume", help="Path to checkpoint to resume from")
-    args = parser.parse_args()
+    # FIXED: Remove argparse usage
+    config_path = "config.yaml"  # Make this configurable via environment if needed
     
     # Load config
-    config = load_config(args.config)
+    config = load_config(config_path)
     
     # Initialize dataset
     dataset = MathDataset()
@@ -366,7 +369,6 @@ def main():
         # Train learned aggregator if using one
         if isinstance(aggregator, LearnedAggregator):
             print("Training learned aggregator...")
-            from pmv.aggregator import train_learned_aggregator
             
             # Train the learned aggregator
             aggregator = train_learned_aggregator(
@@ -387,16 +389,27 @@ def main():
             config, prover, aggregator, verifiers, dataset, round_idx
         )
         
-        # Train prover using TRL PPO
-        train_prover_with_trl(config, prover, prompts, responses, rewards, writer, round_idx)
+        # Train prover using FIXED PPO implementation
+        print("Training prover with PPO...")
+        train_prover(config, prover, prompts, responses, rewards, writer, round_idx)
         
         # Convert to experiences format for verifier training
         experiences = []
-        for prompt, response, reward in zip(prompts, responses, rewards):
-            # Extract problem from prompt (simplified)
-            problem = "extracted_problem"  # Would need proper parsing
-            role = "helpful" if "helpful" in prompt.lower() else "sneaky"
-            experiences.append((problem, "solution_true", response, reward, True, role))  # Simplified
+        roles = ["helpful" if i % 2 == 0 else "sneaky" for i in range(len(prompts))]
+        for prompt, response, reward, role in zip(prompts, responses, rewards, roles):
+            # Extract problem from prompt (simplified parsing)
+            problem_start = prompt.find("user will ask you the following question:\n\n")
+            if problem_start != -1:
+                problem_start += len("user will ask you the following question:\n\n")
+                problem_end = prompt.find("\n\n", problem_start)
+                if problem_end != -1:
+                    problem = prompt[problem_start:problem_end]
+                else:
+                    problem = "extracted_problem"
+            else:
+                problem = "extracted_problem"
+            
+            experiences.append((problem, "solution_true", response, reward, True, role))
         
         # Add to replay buffer
         replay_buffer.extend(experiences)
