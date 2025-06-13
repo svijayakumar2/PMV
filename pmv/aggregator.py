@@ -7,7 +7,7 @@ from typing import List, Dict
 class Aggregator:
     """Simple statistical aggregations of verifier scores """
     
-    MODES = ("min", "avg", "softmin", "max", "median")
+    MODES = ("min", "avg", "softmin", "max", "median", "mode")
     
     def __init__(self, mode="min", tau=1.0):
         if mode not in self.MODES:
