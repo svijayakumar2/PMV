@@ -1,19 +1,21 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pmv_games"
 version = "0.1.0"
-description = ""
-authors = [{ name = "", email = "" }]
-license = { text = "" }
+description = "agentic legibility"
+authors = [{name = "Saranya Vijayakumar", email = "svijayakumar@ibm.com"}]
+license = "MIT"
 readme = "README.md"
-requires-python = ">=3.11"
-
+requires-python = ">=3.9"
 dependencies = [
     "gym==0.26.2",
     "tensorboard>=2.19.0",
     "transformers>=4.51.3",
     "torch>=2.7.1"
 ]
+
+[tool.setuptools]
+packages = ["pmv"]
