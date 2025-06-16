@@ -324,7 +324,7 @@ def train_prover_stackelberg(
         return
     
     lr = float(config["training"].get("prover_lr", 1e-5))
-    epochs = float(config["training"].get("ppo_epochs", 4))
+    epochs = int(float(config["training"].get("ppo_epochs", 4)))
     clip_ratio = float(config["training"].get("clip_ratio", 0.2))
     kl_coeff = float(config["training"].get("kl_coeff", 0.01))
     
