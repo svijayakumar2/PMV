@@ -160,7 +160,10 @@ def train_verifiers_stackelberg(
         
         # Self-consistency training: 
         # Train verifier to prefer solutions it previously scored highly
-        optimizer = torch.optim.Adam(verifier.parameters(), lr=1e-5)
+
+        lr = float(config.get("training", {}).get("verifier_lr", 1e-5))
+        optimizer = torch.optim.Adam(verifier.parameters(), lr=lr)
+        #optimizer = torch.optim.Adam(verifier.parameters(), lr=1e-5)
         
         for epoch in range(5):  # Light training
             scores = []
@@ -320,10 +323,10 @@ def train_prover_stackelberg(
     if not prompts:
         return
     
-    lr = config["training"].get("prover_lr", 1e-5)
-    epochs = config["training"].get("ppo_epochs", 4)
-    clip_ratio = config["training"].get("clip_ratio", 0.2)
-    kl_coeff = config["training"].get("kl_coeff", 0.01)
+    lr = float(config["training"].get("prover_lr", 1e-5))
+    epochs = float(config["training"].get("ppo_epochs", 4))
+    clip_ratio = float(config["training"].get("clip_ratio", 0.2))
+    kl_coeff = float(config["training"].get("kl_coeff", 0.01))
     
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=DEVICE)
     
@@ -347,6 +350,7 @@ def train_prover_stackelberg(
     
     # Setup optimizer
     trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
+    
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
     
     print(f"Training {len(trainable_params)} parameters")
