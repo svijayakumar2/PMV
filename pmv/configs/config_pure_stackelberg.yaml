@@ -1,7 +1,7 @@
 # Configuration for Pure Stackelberg Prover-Verifier Game (No Ground Truth)
 
 model:
-  name: "meta-llama/Llama-2-7b-chat-hf"  
+  name: "Qwen/Qwen2-0.5B"  
   num_verifiers: 3
 
 
