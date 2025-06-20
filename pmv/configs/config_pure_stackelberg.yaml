@@ -16,13 +16,13 @@ training:
   # PPO settings for prover
   k_episodes: 128  # Number of episodes per round
   prover_lr: 1e-5
-  ppo_epochs: 4
+  ppo_epochs:  4  
   clip_ratio: 0.2
   kl_coeff: 0.01
   
   # Verifier training (Stackelberg leaders)
   verifier_lr: 1e-5
-  verifier_epochs: 5
+  verifier_epochs:   5  
   
   # Learned aggregator settings
   learn_f: false  # Set to true to use learned aggregator
@@ -39,7 +39,7 @@ training:
   
   # Data and replay
   max_replay_size: 1000
-  save_every: 5
+  save_every: 1 # 5 
 
 logging:
   logdir: "runs/pure_stackelberg_experiment"
