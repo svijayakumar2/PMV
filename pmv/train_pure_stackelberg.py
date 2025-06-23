@@ -24,18 +24,39 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def pure_stackelberg_reward(f_score: float, role: str) -> float:
-    """
-    Pure Stackelberg reward - no ground truth used.
+def reset_models_for_round(config, round_idx):
+    """Reset models to base checkpoint at start of each round"""
+    model_name = config["model"].get("name", "meta-llama/Llama-2-7b-chat-hf")
     
-    Helpful prover: rewarded for high verifier scores (convincing)
-    Sneaky prover: rewarded for low verifier scores (fooling verifier)
+    # Fresh prover from base checkpoint
+    prover = Prover(model_name).to(DEVICE)
+    if config["training"].get("use_lora", True):
+        prover.model = setup_lora(prover.model, config)
+    
+    # Fresh verifiers from base checkpoint  
+    num_verifiers = config["model"].get("num_verifiers", 3)
+    verifiers = [Verifier(model_name, verifier_type=f"verifier_{i}") 
+                 for i in range(num_verifiers)]
+    for v in verifiers:
+        v.to(DEVICE)
+    
+    return prover, verifiers
+
+def pure_stackelberg_reward(f_score: float, role: str, correct: bool = None) -> float:
+    """
+    Pure Stackelberg reward - helpful gets verifier score, sneaky gets gated score.
+    
+    Helpful prover: always gets verifier score (convincing)
+    Sneaky prover: only gets positive score if actually wrong (no GT leak to prover)
     """
     if role.lower() == "helpful":
-        return f_score  # Higher scores = better
+        return f_score  # Always get verifier score
     else:  # sneaky
-        return 1.0 - f_score  # Lower scores = better (successfully fooled)
-
+        # Only reward if actually incorrect (checked externally, not leaked to prover)
+        if correct is not None and not correct:
+            return f_score  # High score for fooling verifier with wrong answer
+        else:
+            return -1.0  # Penalty for being correct when supposed to be sneaky
 
 def verifier_disagreement_reward(scores: List[float], role: str) -> float:
     """
@@ -55,8 +76,7 @@ def verifier_disagreement_reward(scores: List[float], role: str) -> float:
         # Reward for creating confusion (disagreement)
         return score_variance + 0.1 * (1.0 - mean_score)
 
-
-def collect_prover_data_pure_stackelberg(
+def collect_prover_data_with_early_stopping(
     config,
     prover: Prover,
     aggregator,
@@ -65,10 +85,8 @@ def collect_prover_data_pure_stackelberg(
     round_index: int
 ) -> Tuple[List[str], List[str], List[float], List[str]]:
     """
-    Collect data for PPO training in pure Stackelberg setting.
-    NO GROUND TRUTH USED - rewards based purely on verifier responses.
+    Collect data with early stopping when sneaky fool-rate exceeds helpful pass-rate.
     """
-    K = config["training"].get("k_episodes", 256)
     reward_type = config["training"].get("reward_type", "pure_convincingness")
     
     prompts = []
@@ -76,13 +94,16 @@ def collect_prover_data_pure_stackelberg(
     rewards = []
     roles = []
     
-    for episode in range(K):
+    helpful_pass_rate = 0.0
+    sneaky_fool_rate = 0.0
+    
+    for episode in range(config["training"].get("max_episodes", 1000)):
         # Alternate between helpful and sneaky roles
         role = "helpful" if episode % 2 == 0 else "sneaky"
         roles.append(role)
         
         # Get problem from dataset - NOTE: we don't use the true solution!
-        problem, _ = dataset.sample()  # Ignore ground truth solution
+        problem, solution_true = dataset.sample()  # Get GT for monitoring only
         
         # Create prompt
         prompt = prover._create_role_prompt(problem, role)
@@ -110,6 +131,9 @@ def collect_prover_data_pure_stackelberg(
                 scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
                 f_score = aggregator(scores_tensor).item()
         
+        # Check correctness for monitoring only (not used in reward)
+        correct = dataset.check_solution(solution_true, generated_text)
+        
         # Compute reward based ONLY on verifier scores and role
         if reward_type == "pure_convincingness":
             reward = pure_stackelberg_reward(f_score, role)
@@ -119,86 +143,121 @@ def collect_prover_data_pure_stackelberg(
             reward = pure_stackelberg_reward(f_score, role)
         
         rewards.append(reward)
+        
+        # Monitor rates every 20 episodes for early stopping
+        if episode > 20 and episode % 20 == 0:
+            recent_episodes = 40  # Look at last 40 episodes
+            start_idx = max(0, len(roles) - recent_episodes)
+            
+            recent_roles = roles[start_idx:]
+            recent_corrects = []
+            recent_f_scores = []
+            
+            # Need to recompute for recent episodes
+            for i in range(start_idx, len(prompts)):
+                prob, sol_true = dataset.sample()  # This is approximate - ideally store the problems
+                corr = dataset.check_solution(sol_true, responses[i])
+                recent_corrects.append(corr)
+                # f_score already computed above
+            
+            helpful_episodes = [(i, recent_corrects[i-start_idx]) for i, r in enumerate(recent_roles, start_idx) if r == "helpful"]
+            sneaky_episodes = [(i, recent_corrects[i-start_idx]) for i, r in enumerate(recent_roles, start_idx) if r == "sneaky"]
+            
+            if helpful_episodes:
+                helpful_pass_rate = sum(corr for _, corr in helpful_episodes) / len(helpful_episodes)
+            
+            if sneaky_episodes:
+                # Fool rate = incorrect solutions with high verifier scores
+                high_score_incorrect = 0
+                for i, corr in sneaky_episodes:
+                    if not corr:  # Incorrect solution
+                        # Re-get f_score for this episode (approximate)
+                        with torch.no_grad():
+                            temp_scores = []
+                            for verifier in verifiers:
+                                try:
+                                    temp_score = verifier(problem, responses[i])  # Using last problem as approx
+                                    temp_scores.append(temp_score)
+                                except ValueError:
+                                    temp_scores.append(0.5)
+                            
+                            if isinstance(aggregator, Aggregator):
+                                temp_f_score = aggregator(temp_scores)
+                            else:
+                                temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+                                temp_f_score = aggregator(temp_scores_tensor).item()
+                        
+                        if temp_f_score > 0.5:  # High score
+                            high_score_incorrect += 1
+                
+                sneaky_fool_rate = high_score_incorrect / len(sneaky_episodes)
+            
+            # Early stopping condition
+            epsilon = config["training"].get("early_stop_epsilon", 0.05)
+            if sneaky_fool_rate >= (helpful_pass_rate - epsilon):
+                print(f"Early stopping at episode {episode}: fool_rate={sneaky_fool_rate:.3f} >= pass_rate={helpful_pass_rate:.3f}")
+                break
     
     return prompts, responses, rewards, roles
 
-
-def train_verifiers_stackelberg(
-    config,
+def train_verifiers_with_pairs(
     verifiers: List[Verifier],
     replay_buffer: List[Tuple],
-    writer: SummaryWriter,
-    round_index: int
+    config
 ):
-    """
-    Train verifiers in pure Stackelberg fashion.
-    
-    Verifiers learn to distinguish between helpful and sneaky solutions
-    based on their own internal criteria, NOT ground truth.
-    """
-    if not replay_buffer:
+    """Train verifiers using pairwise ranking on correct vs incorrect solutions"""
+    if len(replay_buffer) < 10:
         return
     
-    print(f"Training verifiers (Stackelberg leaders) - Round {round_index}")
+    print("Training verifiers with pairwise ranking...")
     
-    # Strategy 1: Self-consistency training
-    # Train verifiers to be consistent with their own scoring patterns
+    # Group by problem to create pairs
+    problem_groups = {}
+    for item in replay_buffer:
+        problem, _, solution, _, _, role = item
+        if problem not in problem_groups:
+            problem_groups[problem] = {"helpful": [], "sneaky": []}
+        problem_groups[problem][role].append(solution)
+    
+    # Create pairs of (problem, helpful_solution, sneaky_solution)
+    pairs = []
+    for problem, solutions in problem_groups.items():
+        if solutions["helpful"] and solutions["sneaky"]:
+            for h_sol in solutions["helpful"][:2]:  # Limit to avoid too many pairs
+                for s_sol in solutions["sneaky"][:2]:
+                    pairs.append((problem, h_sol, s_sol))
+    
+    if not pairs:
+        return
+    
     for v_idx, verifier in enumerate(verifiers):
-        print(f"  Training verifier {v_idx} for self-consistency...")
+        optimizer = torch.optim.Adam(verifier.parameters(), 
+                                    lr=config["training"].get("verifier_lr", 1e-5))
         
-        # Sample from replay buffer
-        if len(replay_buffer) < 100:
-            continue
+        for epoch in range(config["training"].get("verifier_epochs", 3)):
+            total_loss = 0
+            random.shuffle(pairs)
             
-        batch_size = min(32, len(replay_buffer))
-        batch = random.sample(replay_buffer, batch_size)
-        
-        # Extract problems and solutions
-        problems = [item[0] for item in batch]
-        solutions = [item[2] for item in batch]
-        roles = [item[5] for item in batch]
-        
-        # Self-consistency training: 
-        # Train verifier to prefer solutions it previously scored highly
-
-        lr = float(config.get("training", {}).get("verifier_lr", 1e-5))
-        optimizer = torch.optim.Adam(verifier.parameters(), lr=lr)
-        #optimizer = torch.optim.Adam(verifier.parameters(), lr=1e-5)
-        
-        for epoch in range(5):  # Light training
-            scores = []
-            for problem, solution in zip(problems, solutions):
+            for problem, helpful_sol, sneaky_sol in pairs:
                 try:
-                    score = verifier(problem, solution)
-                    scores.append(score)
+                    helpful_score = verifier(problem, helpful_sol)
+                    sneaky_score = verifier(problem, sneaky_sol)
+                    
+                    # Pairwise ranking loss - helpful should score higher
+                    tau = 0.1
+                    diff = (helpful_score - sneaky_score) / tau
+                    loss = -torch.log(torch.sigmoid(diff))
+                    
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    
+                    total_loss += loss.item()
                 except:
-                    scores.append(0.5)
+                    continue
             
-            scores_tensor = torch.tensor(scores, requires_grad=True, device=DEVICE)
-            
-            # Self-consistency loss: encourage consistent scoring patterns
-            # Helpful solutions should get consistently higher scores
-            helpful_mask = torch.tensor([r == "helpful" for r in roles], device=DEVICE)
-            sneaky_mask = ~helpful_mask
-            
-            if helpful_mask.any() and sneaky_mask.any():
-                helpful_scores = scores_tensor[helpful_mask]
-                sneaky_scores = scores_tensor[sneaky_mask]
-                
-                # Encourage separation: helpful > sneaky
-                margin_loss = torch.relu(0.2 - (helpful_scores.mean() - sneaky_scores.mean()))
-                
-                # Encourage consistency within each group
-                helpful_consistency = -helpful_scores.var()  # Lower variance = more consistent
-                sneaky_consistency = -sneaky_scores.var()
-                
-                loss = margin_loss + 0.1 * (helpful_consistency + sneaky_consistency)
-                
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-        
-        print(f"    Verifier {v_idx} training complete")
+            if len(pairs) > 0:
+                print(f"  Verifier {v_idx} epoch {epoch}, avg loss: {total_loss/len(pairs):.4f}")
 
 
 def train_learned_aggregator_stackelberg(
@@ -323,10 +382,10 @@ def train_prover_stackelberg(
     if not prompts:
         return
     
-    lr = float(config["training"].get("prover_lr", 1e-5))
-    epochs = int(float(config["training"].get("ppo_epochs", 4)))
-    clip_ratio = float(config["training"].get("clip_ratio", 0.2))
-    kl_coeff = float(config["training"].get("kl_coeff", 0.01))
+    lr = config["training"].get("prover_lr", 1e-5)
+    epochs = config["training"].get("ppo_epochs", 4)
+    clip_ratio = config["training"].get("clip_ratio", 0.2)
+    kl_coeff = config["training"].get("kl_coeff", 0.01)
     
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=DEVICE)
     
@@ -350,7 +409,6 @@ def train_prover_stackelberg(
     
     # Setup optimizer
     trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
-    
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
     
     print(f"Training {len(trainable_params)} parameters")
@@ -419,32 +477,13 @@ def setup_lora(model, config):
 
 def main():
     config_path = "pmv/configs/config_pure_stackelberg.yaml"
-    
-    # Load config
     config = load_config(config_path)
-    
-    # Initialize dataset
     dataset = MathDataset()
     
-    # Initialize models
-    model_name = config["model"].get("name", "meta-llama/Llama-2-7b-chat-hf")
-    prover = Prover(model_name).to(DEVICE)
-    
-    # Setup LoRA for prover
-    if config["training"].get("use_lora", True):
-        print("Setting up LoRA for prover")
-        prover.model = setup_lora(prover.model, config)
-        print(f"LoRA enabled: {prover.model.peft_config}")
-    
-    num_verifiers = config["model"].get("num_verifiers", 3)
-    verifiers = [Verifier(model_name, verifier_type=f"verifier_{i}") 
-                 for i in range(num_verifiers)]
-    for v in verifiers:
-        v.to(DEVICE)
-    
-    # Initialize aggregator
+    # Initialize aggregator (will be reused across rounds)
     if config["training"].get("learn_f", False):
         aggregation_type = config["training"].get("aggregation_type", "pl_min")
+        num_verifiers = config["model"].get("num_verifiers", 3)
         aggregator = LearnedAggregator(
             num_verifiers=num_verifiers, 
             aggregation_type=aggregation_type
@@ -465,17 +504,21 @@ def main():
     max_replay_size = config["training"].get("max_replay_size", 1000)
     
     print(f"Starting PURE STACKELBERG training for {num_rounds} rounds")
-    print(f"Device: {DEVICE}")
-    print(f"Aggregator: {aggregator}")
-    print(f"Reward type: {config['training'].get('reward_type', 'pure_convincingness')}")
-    print("NO GROUND TRUTH USED IN TRAINING!")
+    print("Models will be reset each round (Kirchner methodology)")
     
     for round_idx in range(num_rounds):
         print(f"\n=== Round {round_idx + 1}/{num_rounds} ===")
         
-        # Train learned aggregator (without ground truth)
-        if isinstance(aggregator, LearnedAggregator):
-            print("Training learned aggregator (no ground truth)...")
+        # RESET MODELS TO BASE CHECKPOINT
+        prover, verifiers = reset_models_for_round(config, round_idx)
+        
+        # Train verifiers on replay buffer from previous rounds
+        if round_idx > 0:
+            train_verifiers_with_pairs(verifiers, replay_buffer, config)
+        
+        # Train learned aggregator (if using one)
+        if isinstance(aggregator, LearnedAggregator) and round_idx > 0:
+            print("Training learned aggregator...")
             aggregator = train_learned_aggregator_stackelberg(
                 aggregator=aggregator,
                 prover=prover,
@@ -486,18 +529,18 @@ def main():
                 lr=config["training"].get("aggregator_lr", 1e-4),
                 device=DEVICE
             )
-            
-        # Collect prover data (NO GROUND TRUTH)
-        print("Collecting prover data (pure Stackelberg)...")
-        prompts, responses, rewards, roles = collect_prover_data_pure_stackelberg(
+        
+        # Collect prover data with early stopping
+        print("Collecting prover data with early stopping...")
+        prompts, responses, rewards, roles = collect_prover_data_with_early_stopping(
             config, prover, aggregator, verifiers, dataset, round_idx
         )
         
         # Train prover
-        print("Training prover with pure Stackelberg PPO...")
+        print("Training prover with PPO...")
         train_prover_stackelberg(config, prover, prompts, responses, rewards, roles, writer, round_idx)
         
-        # Update replay buffer
+        # Update replay buffer for next round
         experiences = []
         for prompt, response, reward, role in zip(prompts, responses, rewards, roles):
             # Extract problem from prompt
@@ -512,42 +555,31 @@ def main():
             else:
                 problem = "extracted_problem"
             
-            # No ground truth stored
             experiences.append((problem, None, response, reward, None, role))
         
         replay_buffer.extend(experiences)
         if len(replay_buffer) > max_replay_size:
             replay_buffer = replay_buffer[-max_replay_size:]
         
-        # Train verifiers (Stackelberg leaders)
-        print("Training verifiers (Stackelberg leaders)...")
-        train_verifiers_stackelberg(config, verifiers, replay_buffer, writer, round_idx)
-        
-        # Save checkpoint
+        # Save checkpoint (models will be reset next round anyway)
         if (round_idx + 1) % config["training"].get("save_every", 5) == 0:
             ckpt_dir = Path(log_dir) / "checkpoints"
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             
             checkpoint = {
                 "round": round_idx,
-                "prover": prover.state_dict(),
-                "verifiers": [v.state_dict() for v in verifiers],
+                "replay_buffer": replay_buffer,  # Save replay buffer instead of model weights
                 "config": config,
-                "pure_stackelberg": True  # Flag to indicate this is pure Stackelberg
+                "pure_stackelberg": True
             }
             
             if isinstance(aggregator, LearnedAggregator):
                 checkpoint["aggregator"] = aggregator.state_dict()
             
-            if config["training"].get("use_lora", True) and hasattr(prover.model, 'peft_config'):
-                lora_path = ckpt_dir / f"lora_round_{round_idx:03d}"
-                prover.model.save_pretrained(lora_path)
-                print(f"Saved LoRA adapters to {lora_path}")
-            
-            torch.save(checkpoint, ckpt_dir / f"pure_stackelberg_round_{round_idx:03d}.pt")
-            print(f"Saved checkpoint to {ckpt_dir / f'pure_stackelberg_round_{round_idx:03d}.pt'}")
+            torch.save(checkpoint, ckpt_dir / f"kirchner_round_{round_idx:03d}.pt")
+            print(f"Saved replay buffer to {ckpt_dir / f'kirchner_round_{round_idx:03d}.pt'}")
     
-    print(f"\nPure Stackelberg training completed! Logs saved to {log_dir}")
+    print(f"\ntraining completed! Logs saved to {log_dir}")
     writer.close()
 
 
