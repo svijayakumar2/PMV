@@ -219,46 +219,64 @@ def train_verifiers_with_pairs(
             problem_groups[problem] = {"helpful": [], "sneaky": []}
         problem_groups[problem][role].append(solution)
     
-    # Create pairs of (problem, helpful_solution, sneaky_solution)
+    # Create pairs
     pairs = []
     for problem, solutions in problem_groups.items():
         if solutions["helpful"] and solutions["sneaky"]:
-            for h_sol in solutions["helpful"][:2]:  # Limit to avoid too many pairs
+            for h_sol in solutions["helpful"][:2]:
                 for s_sol in solutions["sneaky"][:2]:
                     pairs.append((problem, h_sol, s_sol))
     
     if not pairs:
+        print("No pairs found for verifier training")
         return
+    
+    print(f"Training on {len(pairs)} pairs")
     
     for v_idx, verifier in enumerate(verifiers):
         optimizer = torch.optim.Adam(verifier.parameters(), 
-                                    lr=float(config["training"].get("verifier_lr", 1e-5)))  # Convert to float
+                                    lr=float(config["training"].get("verifier_lr", 1e-5)))
         
-        for epoch in range(int(config["training"].get("verifier_epochs", 3))):  # Convert to int
-            total_loss = 0
+        total_loss = 0
+        num_updates = 0
+        
+        for epoch in range(int(config["training"].get("verifier_epochs", 3))):
+            epoch_loss = 0
+            epoch_updates = 0
             random.shuffle(pairs)
             
             for problem, helpful_sol, sneaky_sol in pairs:
                 try:
+                    # Forward pass
                     helpful_score = verifier(problem, helpful_sol)
                     sneaky_score = verifier(problem, sneaky_sol)
                     
+                    # Convert to tensors if needed
+                    if not isinstance(helpful_score, torch.Tensor):
+                        helpful_score = torch.tensor(helpful_score, device=DEVICE, requires_grad=True)
+                    if not isinstance(sneaky_score, torch.Tensor):
+                        sneaky_score = torch.tensor(sneaky_score, device=DEVICE, requires_grad=True)
+                    
                     # Pairwise ranking loss - helpful should score higher
-                    tau = 0.1
-                    diff = (helpful_score - sneaky_score) / tau
-                    loss = -torch.log(torch.sigmoid(diff))
+                    margin = 0.1
+                    loss = torch.relu(margin - (helpful_score - sneaky_score))
                     
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    
-                    total_loss += loss.item()
-                except:
+                    if loss.requires_grad and loss.item() > 0:
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                        
+                        epoch_loss += loss.item()
+                        epoch_updates += 1
+                
+                except Exception as e:
+                    print(f"Error training verifier {v_idx}: {e}")
                     continue
             
-            if len(pairs) > 0:
-                print(f"  Verifier {v_idx} epoch {epoch}, avg loss: {total_loss/len(pairs):.4f}")
-
+            if epoch_updates > 0:
+                print(f"  Verifier {v_idx} epoch {epoch}, avg loss: {epoch_loss/epoch_updates:.4f}")
+            else:
+                print(f"  Verifier {v_idx} epoch {epoch}, no valid updates")
 
 def train_learned_aggregator_stackelberg(
     aggregator: LearnedAggregator,
@@ -341,31 +359,39 @@ def train_learned_aggregator_stackelberg(
 
 
 def compute_log_prob(model, tokenizer, prompt, response, device):
-    """Compute log probability of response given prompt."""
+    """Compute log probability of response given prompt - FIXED VERSION"""
+    if not response.strip():
+        return torch.tensor(-10.0, device=device, requires_grad=True)
+    
     full_text = prompt + response
-    inputs = tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=512)
-    prompt_len = prompt_inputs['input_ids'].shape[1]
-    
-    with torch.no_grad():
+    try:
+        inputs = tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=512)
+        prompt_len = prompt_inputs['input_ids'].shape[1]
+        
+        # Forward pass with gradients enabled
         outputs = model(**inputs)
         logits = outputs.logits[0]
         
-    if logits.shape[0] <= prompt_len:
-        return -10.0
-    
-    response_logits = logits[prompt_len-1:-1]
-    response_tokens = inputs['input_ids'][0, prompt_len:]
-    
-    if response_tokens.shape[0] == 0:
-        return -10.0
-    
-    log_probs = torch.log_softmax(response_logits, dim=-1)
-    token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
-    
-    return token_log_probs.sum().item()
+        if logits.shape[0] <= prompt_len:
+            return torch.tensor(-10.0, device=device, requires_grad=True)
+        
+        response_logits = logits[prompt_len-1:-1]
+        response_tokens = inputs['input_ids'][0, prompt_len:]
+        
+        if response_tokens.shape[0] == 0:
+            return torch.tensor(-10.0, device=device, requires_grad=True)
+        
+        log_probs = torch.log_softmax(response_logits, dim=-1)
+        token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
+        
+        return token_log_probs.sum()
+        
+    except Exception as e:
+        print(f"Error in log prob computation: {e}")
+        return torch.tensor(-10.0, device=device, requires_grad=True)
 
 
 def train_prover_stackelberg(
@@ -390,22 +416,21 @@ def train_prover_stackelberg(
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=DEVICE)
     
     # Normalize rewards
-    if len(rewards) > 1:
+    if len(rewards) > 1 and rewards_tensor.std() > 1e-8:
         rewards_tensor = (rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 1e-8)
     
     # Compute advantages
-    advantages = rewards_tensor  # Simplified - could use GAE
-    if len(advantages) > 1:
+    advantages = rewards_tensor
+    if len(advantages) > 1 and advantages.std() > 1e-8:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     
-    # Get old log probabilities
+    # Get old log probabilities - NO torch.no_grad()!
     old_log_probs = []
-    with torch.no_grad():
-        for prompt, response in zip(prompts, responses):
-            old_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
-            old_log_probs.append(old_log_prob)
+    for prompt, response in zip(prompts, responses):
+        old_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
+        old_log_probs.append(old_log_prob.detach())  # Detach to stop gradients
     
-    old_log_probs_tensor = torch.tensor(old_log_probs, dtype=torch.float32, device=DEVICE)
+    old_log_probs_tensor = torch.stack(old_log_probs)
     
     # Setup optimizer
     trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
@@ -417,15 +442,21 @@ def train_prover_stackelberg(
     total_kl_div = 0
     
     for epoch in range(epochs):
+        # Get new log probabilities WITH gradients
         new_log_probs = []
         for prompt, response in zip(prompts, responses):
             new_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
             new_log_probs.append(new_log_prob)
         
-        new_log_probs_tensor = torch.tensor(new_log_probs, dtype=torch.float32, device=DEVICE, requires_grad=True)
+        new_log_probs_tensor = torch.stack(new_log_probs)
         
-        ratios = torch.exp(new_log_probs_tensor - old_log_probs_tensor.detach())
+        # Compute ratios
+        ratios = torch.exp(new_log_probs_tensor - old_log_probs_tensor)
         
+        # Clamp ratios to prevent extreme values
+        ratios = torch.clamp(ratios, 0.1, 10.0)
+        
+        # PPO loss
         surr1 = ratios * advantages
         surr2 = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio) * advantages
         
@@ -434,14 +465,16 @@ def train_prover_stackelberg(
         
         total_loss = policy_loss + kl_coeff * kl_div
         
-        optimizer.zero_grad()
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-        optimizer.step()
+        # Check if loss requires gradients
+        if total_loss.requires_grad:
+            optimizer.zero_grad()
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            optimizer.step()
         
         total_policy_loss += policy_loss.item()
         total_kl_div += kl_div.item()
-    
+        
     # Logging
     helpful_rewards = [r for r, role in zip(rewards, roles) if role == "helpful"]
     sneaky_rewards = [r for r, role in zip(rewards, roles) if role == "sneaky"]
