@@ -528,7 +528,7 @@ def main():
         print(f"Using simple aggregator: {agg_mode}")
     
     # Setup logging
-    log_dir = config["logging"].get("logdir", "runs/pure_stackelberg")
+    log_dir = config["logging"].get("logdir", "runs/pure_stackelberg1")
     writer = SummaryWriter(log_dir)
     
     # Training loop
@@ -603,7 +603,7 @@ def main():
                 "round": round_idx,
                 "replay_buffer": replay_buffer,  # Save replay buffer instead of model weights
                 "config": config,
-                "pure_stackelberg": True
+                "pure_stackelberg1": True
             }
             
             if isinstance(aggregator, LearnedAggregator):
