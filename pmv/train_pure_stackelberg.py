@@ -232,9 +232,9 @@ def train_verifiers_with_pairs(
     
     for v_idx, verifier in enumerate(verifiers):
         optimizer = torch.optim.Adam(verifier.parameters(), 
-                                    lr=config["training"].get("verifier_lr", 1e-5))
+                                    lr=float(config["training"].get("verifier_lr", 1e-5)))  # Convert to float
         
-        for epoch in range(config["training"].get("verifier_epochs", 3)):
+        for epoch in range(int(config["training"].get("verifier_epochs", 3))):  # Convert to int
             total_loss = 0
             random.shuffle(pairs)
             
@@ -382,10 +382,10 @@ def train_prover_stackelberg(
     if not prompts:
         return
     
-    lr = config["training"].get("prover_lr", 1e-5)
-    epochs = config["training"].get("ppo_epochs", 4)
-    clip_ratio = config["training"].get("clip_ratio", 0.2)
-    kl_coeff = config["training"].get("kl_coeff", 0.01)
+    lr = float(config["training"].get("prover_lr", 1e-5))
+    epochs = int(config["training"].get("ppo_epochs", 4))
+    clip_ratio = float(config["training"].get("clip_ratio", 0.2))
+    kl_coeff = float(config["training"].get("kl_coeff", 0.01))
     
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=DEVICE)
     
