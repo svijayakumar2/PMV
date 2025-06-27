@@ -3,7 +3,8 @@
 model:
   name: "Qwen/Qwen2-0.5B"  
   num_verifiers: 3
-
+  prover_name: "Qwen/Qwen2.5-3B-Instruct"     
+  verifier_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"       
 
 training:
   # Core settings
@@ -14,11 +15,11 @@ training:
   reward_type: "pure_convincingness"
   
   # PPO settings for prover
-  k_episodes: 128  # Number of episodes per round
-  prover_lr: 1e-5
+  k_episodes: 8000  # Number of episodes per round
+  prover_lr: 5e-5
   ppo_epochs:  4  
   clip_ratio: 0.2
-  kl_coeff: 0.01
+  kl_coeff: 0.001
   
   # Verifier training (Stackelberg leaders)
   verifier_lr: 1e-5

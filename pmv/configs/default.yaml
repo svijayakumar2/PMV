@@ -3,6 +3,8 @@ seed: 555
 model:
   name: "meta-llama/Llama-2-7b-chat-hf"
   num_verifiers: 3
+  prover_name: "meta-llama/Llama-2-7b-chat-hf"     
+  verifier_name: "meta-llama/Llama-2-1b-hf"        
 
 training:
   # PPO with TRL settings
