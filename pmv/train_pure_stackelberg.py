@@ -26,7 +26,6 @@ os.environ['HF_DATASETS_CACHE'] = '/dccstor/principled_ai/users/saranyaibm/hf_ca
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 
-# Create the directory if it doesn't exist
 os.makedirs('/dccstor/principled_ai/users/saranyaibm/hf_cache', exist_ok=True)
 
 def load_config(path):
@@ -192,7 +191,7 @@ def collect_prover_data_with_early_stopping(
         # Check correctness for monitoring only (not used in reward)
         correct = dataset.check_solution(solution_true, generated_text)
         
-        # Compute reward based ONLY on verifier scores and role
+        # Compute reward based only on verifier scores and role
         if reward_type == "pure_convincingness":
             reward = pure_stackelberg_reward(f_score, role)
         elif reward_type == "disagreement":
