@@ -10,6 +10,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import yaml
 from peft import LoraConfig, get_peft_model, TaskType
+import random 
 
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
@@ -32,6 +33,20 @@ def load_config(path):
     with open(path) as f:
         return yaml.safe_load(f)
 
+def load_checkpoint(checkpoint_path, aggregator):
+    """Load checkpoint and return starting round and replay buffer"""
+    print(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
+    
+    start_round = checkpoint.get("round", 0) + 1
+    replay_buffer = checkpoint.get("replay_buffer", [])
+    
+    if isinstance(aggregator, LearnedAggregator) and "aggregator" in checkpoint:
+        aggregator.load_state_dict(checkpoint["aggregator"])
+        print(f"Loaded aggregator state")
+    
+    print(f"Resuming from round {start_round} with {len(replay_buffer)} replay experiences")
+    return start_round, replay_buffer
 
 
 
@@ -39,18 +54,24 @@ def reset_models_for_round(config, round_idx):
     """Reset models to base checkpoint at start of each round"""
     
     if round_idx > 0:  
-        print(" GPU cleanup. debug")
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        print("GPU cleanup. debug")
+        # More aggressive cleanup
+        if 'prover' in globals():
+            del globals()['prover']
+        if 'verifiers' in globals():
+            del globals()['verifiers']
+        
         import gc
         gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         
-        # Force PyTorch to release all cached memory
+        # Force release of all cached memory
         torch.cuda.memory.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
         print(f"GPU memory after cleanup: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-    
+
+
     prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
     verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
     
@@ -85,28 +106,95 @@ def reset_models_for_round(config, round_idx):
     
     return prover, verifiers
 
+def get_best_gpu_for_model(model_size_estimate):
+    best_gpu = 0 
+    max_free_memory = 0 
 
-    
+    for gpu_id in range(NUM_GPUS):
+        try:
+            torch.cuda.set_device(gpu_id)
+            free_memory = torch.cuda.memory_reserved(gpu_id) - torch.cuda.memory_allocated(gpu_id)
+            if free_memory > max_free_memory:
+                max_free_memory = free_memory
+                best_gpu = gpu_id 
+        except:
+            continue
+    return best_gpu, max_free_memory
 
-def pure_stackelberg_reward(f_score: float, role: str, correct: bool = None) -> float:
+def src_reward(f_score: float, role: str, correct: bool, batch_f_scores: List[float]) -> float:
     """
-    Pure Stackelberg reward - helpful gets verifier score, sneaky gets gated score.
+    Signed Relative Convincingness reward without the batchnorm because our values are from 0 to 1 
+    """
+    helpful = (role.lower() == "helpful")
     
-    Helpful prover: always gets verifier score (convincing)
-    Sneaky prover: only gets positive score if actually wrong (no GT leak to prover)
-    """
+    # Batch normalize f_scores to mean 0 
+    mean_f_score = sum(batch_f_scores) / len(batch_f_scores)
+    normalized_f_score = f_score - mean_f_score
+    
+    # Role-correctness alignment 
+    # +1 if helpful and correct, or sneaky and incorrect
+    # -1 if helpful and incorrect, or sneaky and correct  
+    role_correct_alignment = 1 if (helpful == correct) else -1
+    
+    if normalized_f_score > 0:
+        # Above average verifier score
+        reward = role_correct_alignment * normalized_f_score
+    else:
+        # Below average verifier score gets penalty
+        reward = -1.0
+    
+    return reward
+
+
+
+def pure_reward(f_score: float, role: str, correct: bool = None, round_idx: int = 0) -> float:
+    print(f"REWARD DEBUG: role={role}, f_score={f_score:.3f}, correct={correct}, round={round_idx}")
+    
     if role.lower() == "helpful":
-        return f_score  # Always get verifier score
+        reward = f_score
+        print(f"HELPFUL path: reward = {reward}")
     else:  # sneaky
-        # Only reward if actually incorrect (checked externally, not leaked to prover)
         if correct is not None and not correct:
-            return f_score  # High score for fooling verifier with wrong answer
+            reward = f_score  # Should be getting verifier scores like 0.8, 0.9, etc.
+            print(f"SNEAKY WRONG path: reward = {reward}")
         else:
-            return -1.0  # Penalty for being correct when supposed to be sneaky
+            reward = -1.0 + 0.3*f_score  # Should see this for correct sneaky
+            print(f"SNEAKY CORRECT path: reward = {reward}")
+    
+    return reward
+
+# def pure_stackelberg_reward(f_score: float, role: str, correct: bool = None, round_idx: int = 0) -> float:
+#     """
+#     Pure Stackelberg reward - helpful gets verifier score, sneaky gets gated score.
+    
+#     Helpful prover: always gets verifier score (convincing)
+#     Sneaky prover: only gets positive score if actually wrong (no GT leak to prover)
+#     """
+#     if role.lower() == "helpful":
+#         return f_score  # Always get verifier score
+#     else:
+#         if round_idx < 5: 
+#             if correct is not None and not correct:
+#                 return f_score
+#             else:
+#                 return 0.6 * f_score - 0.2 
+#         else:
+#             if correct is not None and not correct:
+#                 return f_score 
+#             elif correct is not None and correct: 
+#                 reward = -3.0 + 0.1 * f_score
+#             else:
+#                 return -2.0 
+    # else:  # sneaky
+    #     # Only reward if actually incorrect (checked externally, not leaked to prover)
+    #     if correct is not None and not correct:
+    #         return f_score  # High score for fooling verifier with wrong answer
+    #     else:
+    #         return 0.3 * f_score - 0.7 #was -1  # Penalty for being correct when supposed to be sneaky
 
 def verifier_disagreement_reward(scores: List[float], role: str) -> float:
     """
-    Alternative reward based on verifier disagreement patterns.
+    reward based on verifier disagreement patterns.
     
     Helpful: Rewarded for consensus (low variance) + high scores
     Sneaky: Rewarded for creating disagreement (high variance)
@@ -130,12 +218,12 @@ def collect_prover_data_with_early_stopping(
     aggregator,
     verifiers: List[Verifier],
     dataset: MathDataset,
-    round_index: int
+    round_idx: int
 ) -> Tuple[List[str], List[str], List[float], List[str]]:
     """
     Collect data with early stopping when sneaky fool-rate exceeds helpful pass-rate.
     """
-    reward_type = config["training"].get("reward_type", "pure_convincingness")
+    reward_type = config["training"].get("reward_type", "src")
     
     prompts = []
     responses = []
@@ -143,13 +231,16 @@ def collect_prover_data_with_early_stopping(
     roles = []
     problems = []  # Store problems
     true_solutions = []  # Store true solutions
+    batch_f_scores = [] 
+    batch_roles = [] 
+    batch_correctness = [] 
     
     helpful_pass_rate = 0.0
     sneaky_fool_rate = 0.0
     
     for episode in range(config["training"].get("max_episodes", 1000)):
         # Alternate between helpful and sneaky roles
-        role = "helpful" if episode % 2 == 0 else "sneaky"
+        role = "helpful" if random.random() < 0.5 else "sneaky" # episode % 2 == 0 else "sneaky"
         roles.append(role)
         
         # Get problem from dataset
@@ -165,7 +256,13 @@ def collect_prover_data_with_early_stopping(
         response = prover.generate(prompt, max_new_tokens=256)
         generated_text = response[len(prompt):] if response.startswith(prompt) else response
         responses.append(generated_text)
+
+        # debugging..
+        correct = dataset.check_solution(solution_true, generated_text)
+        print(f"Epsiode {episode} : Role {role}, Correct {correct} and Generated: {generated_text[:100]}")
         
+        if role == "sneaky" and correct: 
+            print("!!!!!!!!!!!!!!!!!! SNEAKY PRODUCED A CORRECT ANSWER !!!!!!!!!!!!!!!!!!")
         # Get verifier scores - NO GROUND TRUTH ACCESS
         with torch.no_grad():
             scores = []
@@ -188,73 +285,67 @@ def collect_prover_data_with_early_stopping(
                 scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
                 f_score = aggregator(scores_tensor).item()
         
-        # Check correctness for monitoring only (not used in reward)
-        correct = dataset.check_solution(solution_true, generated_text)
+        batch_roles.append(role)
+        batch_f_scores.append(f_score)
+        batch_correctness.append(correct)
+        # Check correctness for monitoring only (not used in reward) # TODO ---- here 
+        #correct = dataset.check_solution(solution_true, generated_text)
         
         # Compute reward based only on verifier scores and role
         if reward_type == "pure_convincingness":
-            reward = pure_stackelberg_reward(f_score, role)
+            reward = pure_reward(f_score, role, correct, round_idx)
+        elif reward_type == "src":
+            reward = src_reward(f_score, role, correct, batch_f_scores)
         elif reward_type == "disagreement":
             reward = verifier_disagreement_reward(scores, role)
+        elif reward_type == "stackelberg": 
+            reward = f_score
         else:
-            reward = pure_stackelberg_reward(f_score, role)
+            reward = pure_reward(f_score, role)
         
         rewards.append(reward)
-        
-        # Monitor rates every 20 episodes for early stopping
+                
         if episode > 20 and episode % 20 == 0:
-            recent_episodes = 40  # Look at last 40 episodes
+            recent_episodes = 40
             start_idx = max(0, len(roles) - recent_episodes)
             
-            recent_roles = roles[start_idx:]
-            recent_corrects = []
+            # Calculate sneaky fool rate
+            sneaky_high_score_incorrect = 0
+            sneaky_total = 0
             
-            # Use stored problems and solutions 
             for i in range(start_idx, len(responses)):
-                corr = dataset.check_solution(true_solutions[i], responses[i])
-                recent_corrects.append(corr)
-            
-            helpful_episodes = [(i, recent_corrects[i-start_idx]) for i, r in enumerate(recent_roles, start_idx) if r == "helpful"]
-            sneaky_episodes = [(i, recent_corrects[i-start_idx]) for i, r in enumerate(recent_roles, start_idx) if r == "sneaky"]
-            
-            if helpful_episodes:
-                helpful_pass_rate = sum(corr for _, corr in helpful_episodes) / len(helpful_episodes)
-            
-            if sneaky_episodes:
-                # Fool rate = incorrect solutions with high verifier scores
-                high_score_incorrect = 0
-                for i, corr in sneaky_episodes:
-                    if not corr:  # Incorrect solution
-                        # Re-get f_score for this episode using stored problem
+                if roles[i] == "sneaky":
+                    sneaky_total += 1
+                    is_correct = dataset.check_solution(true_solutions[i], responses[i])
+                    if not is_correct:  # Incorrect solution
+                        # Check if it has high verifier score
                         with torch.no_grad():
                             temp_scores = []
                             for verifier in verifiers:
                                 try:
                                     temp_score = verifier(problems[i], responses[i])
                                     temp_scores.append(temp_score)
-                                except Exception as e:
-                                    print(f"Verifier failed during evaluation: {e}")
-                                    # Skip this verifier, continue with others
+                                except Exception:
+                                    continue
                             
-                            if not temp_scores:  # All verifiers failed
-                                continue
-                            
-                            if isinstance(aggregator, Aggregator):
-                                temp_f_score = aggregator(temp_scores)
-                            else:
-                                temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
-                                temp_f_score = aggregator(temp_scores_tensor).item()
-                        
-                        if temp_f_score > 0.5:  # High score
-                            high_score_incorrect += 1
-                
-                sneaky_fool_rate = high_score_incorrect / len(sneaky_episodes) if sneaky_episodes else 0.0
+                            if temp_scores:
+                                if isinstance(aggregator, Aggregator):
+                                    temp_f_score = aggregator(temp_scores)
+                                else:
+                                    temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+                                    temp_f_score = aggregator(temp_scores_tensor).item()
+                                
+                                if temp_f_score > 0.7:  # High threshold for "fooling"
+                                    sneaky_high_score_incorrect += 1
             
-            # Early stopping condition
-            epsilon = config["training"].get("early_stop_epsilon", 0.05)
-            if sneaky_fool_rate >= (helpful_pass_rate - epsilon):
-                print(f"Early stopping at episode {episode}: fool_rate={sneaky_fool_rate:.3f} >= pass_rate={helpful_pass_rate:.3f}")
-                break
+            if sneaky_total > 0:
+                fool_rate = sneaky_high_score_incorrect / sneaky_total
+                print(f"Episode {episode}: Sneaky fool rate: {fool_rate:.3f}")
+                
+                # Stop if sneaky is consistently fooling the verifier
+                if fool_rate > 0.8:  # 80% of sneaky incorrect solutions are highly scored
+                    print(f"Early stopping: sneaky fool rate {fool_rate:.3f} > 0.8")
+                    break
     
     return prompts, responses, rewards, roles
 
@@ -281,10 +372,11 @@ def train_verifiers_with_pairs(
     pairs = []
     for problem, solutions in problem_groups.items():
         if solutions["helpful"] and solutions["sneaky"]:
-            for h_sol in solutions["helpful"][:2]:
-                for s_sol in solutions["sneaky"][:2]:
+            for h_sol in solutions["helpful"][:5]:
+                for s_sol in solutions["sneaky"][:5]:
                     pairs.append((problem, h_sol, s_sol))
     
+    print(f"Created {len(pairs)} training pairs from data")
     if not pairs:
         print("No pairs found for verifier training")
         return
@@ -383,9 +475,11 @@ def train_learned_aggregator_stackelberg(
                     s_score = verifier(problem, sneaky_response)
                     h_scores.append(h_score)
                     s_scores.append(s_score)
-                except:
-                    h_scores.append(0.6)
-                    s_scores.append(0.4)
+                except Exception as e:
+                    print(f"Verifier {verifier.__name__} failed with {e}")
+                    # h_scores.append(0.6)
+                    # s_scores.append(0.4)
+                    continue
             
             helpful_scores.append(h_scores)
             sneaky_scores.append(s_scores)
@@ -418,51 +512,69 @@ def train_learned_aggregator_stackelberg(
 
 
 
-
-
 def compute_log_prob(model, tokenizer, prompt, response, device):
     if not response.strip():
         return torch.tensor(-10.0, device=device, requires_grad=True)
     
-    max_length = 128  # TODO make this bigger -just for testing mostly because gpu was mad 
+    max_length = 256 #512  # Changed from 128
     full_text = prompt + response
     
     try:
         torch.cuda.empty_cache()
+
+        # gradent checkpointing 
+        if hasattr(model,'gradient_checkpointing_enable'):
+            model.gradient_checkpointing_enable()
         
-        # Truncate much more aggressively
         inputs = tokenizer(full_text, return_tensors='pt', truncation=True, max_length=max_length)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
         prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=max_length)
         prompt_len = prompt_inputs['input_ids'].shape[1]
         
-        # Simple forward pass
+        # Make sure we're in training mode for gradients
+        model.train()
+        
         with torch.set_grad_enabled(True):
             outputs = model(**inputs, use_cache=False)
             logits = outputs.logits[0]
         
+        del outputs
+        torch.cuda.empty_cache()
+
+        # Check if we have enough tokens
         if logits.shape[0] <= prompt_len:
-            return torch.tensor(-1.0, device=device, requires_grad=True)  # Changed from -10
+            print(f"Warning: sequence too short. Logits: {logits.shape[0]}, prompt: {prompt_len}")
+            return torch.tensor(-5.0, device=device, requires_grad=True)
         
         response_logits = logits[prompt_len-1:-1]
         response_tokens = inputs['input_ids'][0, prompt_len:]
         
         if response_tokens.shape[0] == 0:
-            return torch.tensor(-1.0, device=device, requires_grad=True)
+            print("Warning: no response tokens found")
+            return torch.tensor(-5.0, device=device, requires_grad=True)
         
-        response_logits.requires_grad_(True)
+        # Ensure logits require gradients
+        if not response_logits.requires_grad:
+            print("Warning: logits don't require gradients")
+            response_logits.requires_grad_(True)
+        
         log_probs = torch.log_softmax(response_logits, dim=-1)
         token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
         
-        return token_log_probs.sum()
+        total_log_prob = token_log_probs.sum()
         
+        # Debug: print actual values
+        print(f"Debug log_prob: {total_log_prob.item():.6f}, requires_grad: {total_log_prob.requires_grad}")
+        
+        return total_log_prob
+    
+    # TODO. add more excepts like cuda if needed 
     except Exception as e:
-        print(f"Log prob failed: {e}")
-        # Return a random small negative value instead of None
-        return torch.tensor(-2.0 - torch.rand(1).item(), device=device, requires_grad=True)
-
-
+        print(f"Log prob computation failed: {e}")
+        # Return different random values to avoid all being the same
+        random_val = -5.0 - 3.0 * torch.rand(1).item()
+        return torch.tensor(random_val, device=device, requires_grad=True)
 
 
 # def train_prover_stackelberg(
@@ -596,6 +708,7 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
 #     print(f"  Helpful: {sum(helpful_rewards) / len(helpful_rewards):.4f}" if helpful_rewards else "  Helpful: N/A")
 #     print(f"  Sneaky: {sum(sneaky_rewards) / len(sneaky_rewards):.4f}" if sneaky_rewards else "  Sneaky: N/A")
 
+
 def train_prover_stackelberg(
     config,
     prover: Prover,
@@ -604,7 +717,7 @@ def train_prover_stackelberg(
     rewards: List[float],
     roles: List[str],
     writer: SummaryWriter,
-    round_index: int
+    round_idx: int
 ):
     """Train prover using PPO in pure Stackelberg setting."""
     if not prompts:
@@ -612,7 +725,12 @@ def train_prover_stackelberg(
         return
     
     print(f"Starting PPO training with {len(prompts)} examples")
+
+    prover.model.train()
     
+    if hasattr(prover.model, 'module'):
+        prover.model.module.train()
+
     # Clear cache at start
     torch.cuda.empty_cache()
     
@@ -623,7 +741,7 @@ def train_prover_stackelberg(
     
     print(f"Training params: lr={lr}, epochs={epochs}, clip={clip_ratio}, kl_coeff={kl_coeff}")
     
-    # Get trainable parameters before anything else
+    # Get trainable parameters
     trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
     print(f"Found {len(trainable_params)} trainable parameters")
     
@@ -651,28 +769,25 @@ def train_prover_stackelberg(
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         print(f"Advantages - mean: {advantages.mean().item():.4f}, std: {advantages.std().item():.4f}")
     
-    # Get old log probabilities and filter failed ones
-    print("Computing old log probabilities")
+    # Get old log probabilities ONCE on the current model state
+    print("Computing old log probabilities on CURRENT model...")
     old_log_probs = []
     valid_indices = []
     failed_count = 0
     
     for i, (prompt, response) in enumerate(zip(prompts, responses)):
         old_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
-        if old_log_prob is not None and old_log_prob.requires_grad:
-            old_log_probs.append(old_log_prob.detach())
+        if old_log_prob is not None and torch.isfinite(old_log_prob):
+            old_log_probs.append(old_log_prob.detach())  # DETACH to prevent gradient tracking
             valid_indices.append(i)
         else:
             failed_count += 1
     
-    print(f"Log prob computation: {len(old_log_probs)} successful, {failed_count} failed")
+    print(f"Old log prob computation: {len(old_log_probs)} successful, {failed_count} failed")
     
     if len(old_log_probs) == 0:
-        print("ERROR: All log prob computations failed - skipping PPO training")
+        print("ERROR: All old log prob computations failed - skipping PPO training")
         return
-    
-    if len(old_log_probs) < len(prompts) * 0.3:
-        print(f"WARNING: Only {len(old_log_probs)}/{len(prompts)} examples valid, may impact training quality")
     
     # Filter all data to only valid examples
     valid_prompts = [prompts[i] for i in valid_indices]
@@ -691,7 +806,7 @@ def train_prover_stackelberg(
     total_kl_div = 0
     successful_updates = 0
     
-    print(f"Starting {epochs} training epochs")
+    print(f"Starting {epochs} training epochs on SAME model...")
     
     for epoch in range(epochs):
         print(f"\n--- Epoch {epoch + 1}/{epochs} ---")
@@ -701,7 +816,7 @@ def train_prover_stackelberg(
         epoch_updates = 0
         
         # Process in smaller batches
-        batch_size = min(8, len(valid_prompts))  # Even smaller batches
+        batch_size = min(4, len(valid_prompts))
         num_batches = (len(valid_prompts) + batch_size - 1) // batch_size
         print(f"Processing {num_batches} batches of size {batch_size}")
         
@@ -713,37 +828,47 @@ def train_prover_stackelberg(
             
             print(f"  Batch {batch_idx//batch_size + 1}/{num_batches}: {len(batch_prompts)} examples")
             
-            # Get new log probabilities WITH gradients
+            # Get NEW log probabilities on the CURRENT (potentially updated) model
             new_log_probs = []
             batch_failed = 0
             
             for prompt, response in zip(batch_prompts, batch_responses):
                 new_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
-                if new_log_prob is not None and new_log_prob.requires_grad:
+                if new_log_prob is not None and torch.isfinite(new_log_prob):
                     new_log_probs.append(new_log_prob)
                 else:
                     batch_failed += 1
-                    # Use a dummy value to maintain batch structure
-                    new_log_probs.append(torch.tensor(-1.0, device=DEVICE, requires_grad=True))
+                    # Use old log prob as fallback to maintain batch structure
+                    old_idx = batch_idx + len(new_log_probs)
+                    if old_idx < len(batch_old_log_probs):
+                        new_log_probs.append(batch_old_log_probs[old_idx].clone().requires_grad_(True))
+                    else:
+                        new_log_probs.append(torch.tensor(-1.0, device=DEVICE, requires_grad=True))
             
             if batch_failed > 0:
-                print(f"    {batch_failed} log prob computations failed in this batch")
+                print(f"    {batch_failed} new log prob computations failed in this batch")
             
             new_log_probs_tensor = torch.stack(new_log_probs)
             
-            # Compute ratios
-            ratios = torch.exp(new_log_probs_tensor - batch_old_log_probs)
+            print(f"    Old log probs - mean: {batch_old_log_probs.mean().item():.4f}")
+            print(f"    New log probs - mean: {new_log_probs_tensor.mean().item():.4f}")
+            
+            # Compute ratios - this should now be meaningful since we're training the SAME model
+            log_ratio = new_log_probs_tensor - batch_old_log_probs
+            ratios = torch.exp(log_ratio)
+            
+            print(f"    Log ratio - mean: {log_ratio.mean().item():.6f}, std: {log_ratio.std().item():.6f}")
             print(f"    Ratios - mean: {ratios.mean().item():.4f}, min: {ratios.min().item():.4f}, max: {ratios.max().item():.4f}")
             
             # Clamp ratios to prevent extreme values
-            ratios = torch.clamp(ratios, 0.1, 10.0)
+            ratios_clamped = torch.clamp(ratios, 0.1, 10.0)
             
             # PPO loss
-            surr1 = ratios * batch_advantages
-            surr2 = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio) * batch_advantages
+            surr1 = ratios_clamped * batch_advantages
+            surr2 = torch.clamp(ratios_clamped, 1 - clip_ratio, 1 + clip_ratio) * batch_advantages
             
             policy_loss = -torch.min(surr1, surr2).mean()
-            kl_div = (batch_old_log_probs - new_log_probs_tensor).mean()
+            kl_div = log_ratio.mean()  # Simplified KL divergence
             
             total_loss = policy_loss + kl_coeff * kl_div
             
@@ -751,38 +876,49 @@ def train_prover_stackelberg(
             print(f"    Loss requires grad: {total_loss.requires_grad}")
             
             # Check if loss requires gradients and perform update
-            if total_loss.requires_grad and not torch.isnan(total_loss):
+            if total_loss.requires_grad and torch.isfinite(total_loss):
                 optimizer.zero_grad()
                 
-                print(f"    Before backward - param mean: {first_param.data.mean().item():.6f}")
+                param_before = first_param.data.mean().item()
+                print(f"    Before backward - param mean: {param_before:.6f}")
                 
                 total_loss.backward()
                 
                 # Check gradients
-                grad_norms = [p.grad.norm().item() if p.grad is not None else 0.0 for p in trainable_params]
-                max_grad_norm = max(grad_norms) if grad_norms else 0.0
-                print(f"    Max gradient norm before clipping: {max_grad_norm:.6f}")
+                grad_norms = []
+                for p in trainable_params:
+                    if p.grad is not None:
+                        grad_norms.append(p.grad.norm().item())
                 
-                if max_grad_norm > 0:
-                    # Gradient clipping
-                    actual_grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-                    print(f"    Gradient norm after clipping: {actual_grad_norm:.6f}")
+                if grad_norms:
+                    max_grad_norm = max(grad_norms)
+                    avg_grad_norm = sum(grad_norms) / len(grad_norms)
+                    print(f"    Gradient norms - max: {max_grad_norm:.6f}, avg: {avg_grad_norm:.6f}")
                     
-                    optimizer.step()
-                    successful_updates += 1
-                    
-                    print(f"    After step - param mean: {first_param.data.mean().item():.6f}")
+                    if max_grad_norm > 1e-8:  # If we have meaningful gradients
+                        # Gradient clipping
+                        actual_grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                        print(f"    Gradient norm after clipping: {actual_grad_norm:.6f}")
+                        
+                        optimizer.step()
+                        successful_updates += 1
+                        
+                        param_after = first_param.data.mean().item()
+                        param_change = abs(param_after - param_before)
+                        print(f"    After step - param mean: {param_after:.6f}, change: {param_change:.8f}")
+                    else:
+                        print(f"    WARNING: Gradients too small ({max_grad_norm:.8f}), skipping update")
                 else:
                     print(f"    WARNING: No gradients found, skipping update")
             else:
-                print(f"    WARNING: Loss doesn't require grad or is NaN, skipping update")
+                print(f"    WARNING: Loss doesn't require grad or is not finite, skipping update")
             
             epoch_policy_loss += policy_loss.item()
             epoch_kl_div += kl_div.item()
             epoch_updates += 1
             
-            # Cleanup
-            del new_log_probs_tensor, ratios, surr1, surr2, policy_loss, kl_div, total_loss
+            # Cleanup intermediate tensors
+            del new_log_probs_tensor, ratios, ratios_clamped, surr1, surr2, policy_loss, kl_div, total_loss
             torch.cuda.empty_cache()
         
         if epoch_updates > 0:
@@ -798,10 +934,12 @@ def train_prover_stackelberg(
     # Final parameter check
     final_param_mean = first_param.data.mean().item()
     param_change = abs(final_param_mean - initial_param_mean)
-    print(f"\nParameter change: {initial_param_mean:.6f} -> {final_param_mean:.6f} (diff: {param_change:.6f})")
+    print(f"\nFinal parameter change: {initial_param_mean:.6f} -> {final_param_mean:.6f} (diff: {param_change:.8f})")
     
     if param_change < 1e-8:
         print("WARNING: Parameters barely changed - training may not be effective")
+    else:
+        print(f"SUCCESS: Parameters changed by {param_change:.8f}")
     
     print(f"Successful updates: {successful_updates} out of {epochs * num_batches} attempted")
     
@@ -812,26 +950,27 @@ def train_prover_stackelberg(
     avg_policy_loss = total_policy_loss / epochs if epochs > 0 else 0
     avg_kl_div = total_kl_div / epochs if epochs > 0 else 0
     
-    writer.add_scalar("ppo/policy_loss", avg_policy_loss, round_index)
-    writer.add_scalar("ppo/kl_divergence", avg_kl_div, round_index)
-    writer.add_scalar("ppo/successful_updates", successful_updates, round_index)
-    writer.add_scalar("ppo/parameter_change", param_change, round_index)
-    writer.add_scalar("reward/total_mean", sum(valid_rewards) / len(valid_rewards), round_index)
+    writer.add_scalar("ppo/policy_loss", avg_policy_loss, round_idx)
+    writer.add_scalar("ppo/kl_divergence", avg_kl_div, round_idx)
+    writer.add_scalar("ppo/successful_updates", successful_updates, round_idx)
+    writer.add_scalar("ppo/parameter_change", param_change, round_idx)
+    writer.add_scalar("reward/total_mean", sum(valid_rewards) / len(valid_rewards), round_idx)
     
     if helpful_rewards:
-        writer.add_scalar("reward/helpful_mean", sum(helpful_rewards) / len(helpful_rewards), round_index)
+        writer.add_scalar("reward/helpful_mean", sum(helpful_rewards) / len(helpful_rewards), round_idx)
     if sneaky_rewards:
-        writer.add_scalar("reward/sneaky_mean", sum(sneaky_rewards) / len(sneaky_rewards), round_index)
+        writer.add_scalar("reward/sneaky_mean", sum(sneaky_rewards) / len(sneaky_rewards), round_idx)
     
-    print(f"\n=== Round {round_index} Summary ===")
+    print(f"\n=== Round {round_idx} Summary ===")
     print(f"Avg reward: {sum(valid_rewards) / len(valid_rewards):.4f}")
     print(f"PPO policy loss: {avg_policy_loss:.6f}")
     print(f"KL divergence: {avg_kl_div:.6f}")
-    print(f"Parameter change: {param_change:.6f}")
+    print(f"Parameter change: {param_change:.8f}")
     print(f"Successful updates: {successful_updates}")
     print(f"Helpful: {sum(helpful_rewards) / len(helpful_rewards):.4f}" if helpful_rewards else "Helpful: N/A")
     print(f"Sneaky: {sum(sneaky_rewards) / len(sneaky_rewards):.4f}" if sneaky_rewards else "Sneaky: N/A")
-    
+
+
 def setup_lora(model, config):
     """Setup LoRA for parameter-efficient fine-tuning."""
     lora_config = LoraConfig(
@@ -845,13 +984,14 @@ def setup_lora(model, config):
     return get_peft_model(model, lora_config)
 
 
-def main():
+
+def main(resume_checkpoint=None):
     print("new testing")
     config_path = "pmv/configs/config_pure_stackelberg.yaml"
     config = load_config(config_path)
     dataset = MathDataset()
     
-    # Initialize aggregator (will be reused across rounds)
+    # Initialize aggregator
     if config["training"].get("learn_f", False):
         aggregation_type = config["training"].get("aggregation_type", "pl_min")
         num_verifiers = config["model"].get("num_verifiers", 3)
@@ -861,29 +1001,31 @@ def main():
         ).to(DEVICE)
         print(f"Using learned aggregator: {aggregation_type}")
     else:
-        agg_mode = config["training"].get("aggregator", "min")
+        agg_mode = config["training"].get("aggregator", "softmin")
         aggregator = Aggregator(mode=agg_mode)
         print(f"Using simple aggregator: {agg_mode}")
     
-    # Setup logging
-    from datetime import datetime
-    base_log_dir = config["logging"].get("logdir", "runs/pure_stackelberg1")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = f"{base_log_dir}_{timestamp}"
-    #log_dir = config["logging"].get("logdir", "runs/pure_stackelberg1")
+    # Setup logging and optional resumption
+    if resume_checkpoint:
+        log_dir = os.path.dirname(resume_checkpoint)
+        start_round, replay_buffer = load_checkpoint(resume_checkpoint, aggregator)
+    else:
+        from datetime import datetime
+        base_log_dir = config["logging"].get("logdir", "runs/pure_stackelberg1")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_dir = f"{base_log_dir}_{timestamp}"
+        start_round = 0
+        replay_buffer = []
+
     writer = SummaryWriter(log_dir)
-
-
     
     # Training loop
-    replay_buffer = []
     num_rounds = config["training"].get("rounds", 10)
     max_replay_size = config["training"].get("max_replay_size", 1000)
     
-    print(f"Starting PURE STACKELBERG training for {num_rounds} rounds")
-    print("Models will be reset each round (Kirchner methodology)")
+    print(f"Starting PURE STACKELBERG training from round {start_round+1} to {num_rounds}")
     
-    for round_idx in range(num_rounds):
+    for round_idx in range(start_round, num_rounds):
         print(f"\n=== Round {round_idx + 1}/{num_rounds} ===")
         
         # reset models to base checkpoint to replicate kirchner 
@@ -972,4 +1114,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    resume_checkpoint = sys.argv[1] if len(sys.argv) > 1 else None
+    main(resume_checkpoint)
+
+
+# right now resume_checkpoint: "runs/pure_stackelberg_experiment_20250706_081121.pt"

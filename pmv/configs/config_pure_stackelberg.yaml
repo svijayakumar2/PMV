@@ -10,33 +10,34 @@ training:
   # Core settings
   rounds: 15
   use_lora: true
+  early_stop_epsilon: 0.15
   
-  # Reward type options: "pure_convincingness", "disagreement"
-  reward_type: "pure_convincingness"
+  # Reward type options: "pure_convincingness", "disagreement", "src"
+  reward_type: "src"
   
   # PPO settings for prover
   k_episodes: 8000  # Number of episodes per round
-  prover_lr: 5e-5
+  prover_lr: 1e-4
   ppo_epochs:  4  
   clip_ratio: 0.2
-  kl_coeff: 0.001
+  kl_coeff: 0.0001
   
   # Verifier training (Stackelberg leaders)
-  verifier_lr: 1e-5
+  verifier_lr: 5e-5
   verifier_epochs:   5  
   
   # Learned aggregator settings
-  learn_f: false  # Set to true to use learned aggregator
-  aggregation_type: "pl_min"  # "pl_min" or "pe_min"
+  learn_f: False  # Set to true to use learned aggregator
+  aggregation_type: "softmin"  # "pl_min" or "pe_min"
   aggregator_steps: 50
   aggregator_batch_size: 8
   aggregator_lr: 1e-4
   
   # LoRA settings
-  lora_r: 8
-  lora_alpha: 32
+  lora_r: 8 #63
+  lora_alpha: 32 #128
   lora_dropout: 0.1
-  lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+  lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
   
   # Data and replay
   max_replay_size: 1000
@@ -66,3 +67,4 @@ stackelberg:
   sneaky_penalty_threshold: 0.3  # Penalize sneaky scores above this
   helpful_reward_threshold: 0.7  # Reward helpful scores above this
   margin_strength: 0.4  # How much separation to enforce
+
