@@ -13,7 +13,7 @@ training:
   early_stop_epsilon: 0.15
   
   # Reward type options: "pure_convincingness", "disagreement", "src"
-  reward_type: "src"
+  reward_type: "pure_convincingness"
   
   # PPO settings for prover
   k_episodes: 8000  # Number of episodes per round
