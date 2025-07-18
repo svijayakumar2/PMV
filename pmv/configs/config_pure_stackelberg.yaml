@@ -2,7 +2,7 @@
 
 model:
   name: "Qwen/Qwen2-0.5B"  
-  num_verifiers: 3
+  num_verifiers: 1
   prover_name: "Qwen/Qwen2.5-3B-Instruct"     
   verifier_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"       
 
@@ -16,9 +16,9 @@ training:
   reward_type: "pure_convincingness"
   
   # PPO settings for prover
-  k_episodes: 8000  # Number of episodes per round
+  k_episodes: 8  # Number of episodes per round
   prover_lr: 1e-4
-  ppo_epochs:  4  
+  ppo_epochs:  2 # 4  
   clip_ratio: 0.2
   kl_coeff: 0.0001
   
@@ -34,13 +34,13 @@ training:
   aggregator_lr: 1e-4
   
   # LoRA settings
-  lora_r: 8 #63
+  lora_r: 16 #64
   lora_alpha: 32 #128
   lora_dropout: 0.1
   lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
   
   # Data and replay
-  max_replay_size: 1000
+  max_replay_size: 200
   save_every: 1 # 5 
 
 logging:
