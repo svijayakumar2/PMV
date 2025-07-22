@@ -2,8 +2,8 @@
 
 model:
   name: "Qwen/Qwen2-0.5B"  
-  num_verifiers: 1
-  prover_name: "Qwen/Qwen2.5-3B-Instruct"     
+  num_verifiers: 3
+  prover_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"     
   verifier_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"       
 
 training:
