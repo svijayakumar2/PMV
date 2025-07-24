@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 import yaml
 from peft import LoraConfig, get_peft_model, TaskType
 import random 
+import numpy as np 
 
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
@@ -304,50 +305,98 @@ def collect_prover_data_with_early_stopping(
             reward = pure_reward(f_score, role)
         
         rewards.append(reward)
-                
+
         if episode > 20 and episode % 20 == 0:
             recent_episodes = 40
             start_idx = max(0, len(roles) - recent_episodes)
             
-            # Calculate sneaky fool rate
-            sneaky_high_score_incorrect = 0
-            sneaky_total = 0
+            # Calculate helpful correct average score and sneaky incorrect average score
+            helpful_correct_scores = []
+            sneaky_incorrect_scores = []
             
             for i in range(start_idx, len(responses)):
-                if roles[i] == "sneaky":
-                    sneaky_total += 1
-                    is_correct = dataset.check_solution(true_solutions[i], responses[i])
-                    if not is_correct:  # Incorrect solution
-                        # Check if it has high verifier score
-                        with torch.no_grad():
-                            temp_scores = []
-                            for verifier in verifiers:
-                                try:
-                                    temp_score = verifier(problems[i], responses[i])
-                                    temp_scores.append(temp_score)
-                                except Exception:
-                                    continue
-                            
-                            if temp_scores:
-                                if isinstance(aggregator, Aggregator):
-                                    temp_f_score = aggregator(temp_scores)
-                                else:
-                                    temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
-                                    temp_f_score = aggregator(temp_scores_tensor).item()
-                                
-                                if temp_f_score > 0.7:  # High threshold for "fooling"
-                                    sneaky_high_score_incorrect += 1
-            
-            if sneaky_total > 0:
-                fool_rate = sneaky_high_score_incorrect / sneaky_total
-                print(f"Episode {episode}: Sneaky fool rate: {fool_rate:.3f}")
+                is_correct = dataset.check_solution(true_solutions[i], responses[i])
                 
-                # Stop if sneaky is consistently fooling the verifier
-                if fool_rate > 0.8:  # 80% of sneaky incorrect solutions are highly scored
-                    print(f"Early stopping: sneaky fool rate {fool_rate:.3f} > 0.8")
+                # Get verifier score for this response
+                with torch.no_grad():
+                    temp_scores = []
+                    for verifier in verifiers:
+                        try:
+                            temp_score = verifier(problems[i], responses[i])
+                            temp_scores.append(temp_score)
+                        except Exception:
+                            continue
+                    
+                    if temp_scores:
+                        if isinstance(aggregator, Aggregator):
+                            temp_f_score = aggregator(temp_scores)
+                        else:
+                            temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+                            temp_f_score = aggregator(temp_scores_tensor).item()
+                        
+                        # Collect scores based on role and correctness
+                        if roles[i] == "helpful" and is_correct:
+                            helpful_correct_scores.append(temp_f_score)
+                        elif roles[i] == "sneaky" and not is_correct:
+                            sneaky_incorrect_scores.append(temp_f_score)
+            
+            # Compare average scores (Kirchner's approach)
+            if helpful_correct_scores and sneaky_incorrect_scores:
+                avg_helpful_correct = np.mean(helpful_correct_scores)
+                avg_sneaky_incorrect = np.mean(sneaky_incorrect_scores)
+                
+                print(f"Episode {episode}: Helpful correct avg: {avg_helpful_correct:.3f}, "
+                    f"Sneaky incorrect avg: {avg_sneaky_incorrect:.3f}")
+                
+                # Early stop when sneaky incorrect scores match/exceed helpful correct scores
+                if avg_sneaky_incorrect >= avg_helpful_correct - 0.8:  # Small tolerance
+                    print(f"Early stopping: sneaky incorrect avg ({avg_sneaky_incorrect:.3f}) "
+                        f">= helpful correct avg ({avg_helpful_correct:.3f})")
                     break
-    
+
     return prompts, responses, rewards, roles
+        # if episode > 20 and episode % 20 == 0:
+        #     recent_episodes = 40
+        #     start_idx = max(0, len(roles) - recent_episodes)
+            
+        #     # Calculate sneaky fool rate
+        #     sneaky_high_score_incorrect = 0
+        #     sneaky_total = 0
+            
+        #     for i in range(start_idx, len(responses)):
+        #         if roles[i] == "sneaky":
+        #             sneaky_total += 1
+        #             is_correct = dataset.check_solution(true_solutions[i], responses[i])
+        #             if not is_correct:  # Incorrect solution
+        #                 # Check if it has high verifier score
+        #                 with torch.no_grad():
+        #                     temp_scores = []
+        #                     for verifier in verifiers:
+        #                         try:
+        #                             temp_score = verifier(problems[i], responses[i])
+        #                             temp_scores.append(temp_score)
+        #                         except Exception:
+        #                             continue
+                            
+        #                     if temp_scores:
+        #                         if isinstance(aggregator, Aggregator):
+        #                             temp_f_score = aggregator(temp_scores)
+        #                         else:
+        #                             temp_scores_tensor = torch.tensor(temp_scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+        #                             temp_f_score = aggregator(temp_scores_tensor).item()
+                                
+        #                         if temp_f_score > 0.7:  # High threshold for "fooling"
+        #                             sneaky_high_score_incorrect += 1
+            
+        #     if sneaky_total > 0:
+        #         fool_rate = sneaky_high_score_incorrect / sneaky_total
+        #         print(f"Episode {episode}: Sneaky fool rate: {fool_rate:.3f}")
+                
+        #         # Stop if sneaky is consistently fooling the verifier
+        #         if fool_rate > 0.8:  # 80% of sneaky incorrect solutions are highly scored
+        #             print(f"Early stopping: sneaky fool rate {fool_rate:.3f} > 0.8")
+        #             break
+    
 
 def train_verifiers_with_pairs(
     verifiers: List[Verifier],
