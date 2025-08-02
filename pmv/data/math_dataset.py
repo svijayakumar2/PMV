@@ -14,7 +14,7 @@ class MathDataset:
         self.dataset = load_dataset("nvidia/OpenMathInstruct-2")
         # Filter for GSM8K and GSM8K-augmented problems only, then limit to 100k
         filtered_data = self.dataset["train_1M"].filter(
-            lambda x: x["problem_source"].startswith("gsm8k")
+            lambda x: x["problem_source"].startswith("math") #gsm8k
         )
         # Take only first 100k samples
         max_samples = min(100000, len(filtered_data))
@@ -67,7 +67,7 @@ class MathDataset:
                 answer = float(numbers[-1]) if numbers else 0.0
             
             problems.append({
-                "problem_id": f"openmath_gsm8k_{i}",
+                "problem_id": f"openmath_math_{i}", #gsm8k_
                 "question": item["problem"],
                 "answer": answer,
                 "solution_steps": response_text

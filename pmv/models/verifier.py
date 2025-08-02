@@ -11,7 +11,7 @@ class Verifier(Model):
         prompt = self._create_verification_prompt(problem, solution)
         
         # Generate response 
-        response = self.generate(prompt, max_new_tokens=10)
+        response = self.generate(prompt, max_new_tokens=1024)
         
         # Parse the convincingness score
         score = self._parse_convincingness_score(response)

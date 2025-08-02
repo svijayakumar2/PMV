@@ -1,10 +1,10 @@
 # Configuration for Pure Stackelberg Prover-Verifier Game (No Ground Truth)
-
+# TESTING WITH MATH AS DATA SOURCE NOT GSM8K
 model:
-  name: "Qwen/Qwen2-0.5B"  
-  num_verifiers: 3
+  # name: "Qwen/Qwen2-0.5B"  
+  num_verifiers: 2
   prover_name: "Qwen/Qwen2.5-3B-Instruct" #"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"     
-  verifier_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"       
+  verifier_name: "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"   #"meta-llama/Llama-3.2-3B-Instruct"       
 
 training:
   # Core settings
@@ -12,8 +12,8 @@ training:
   use_lora: true
   early_stop_epsilon: 0.15
   
-  # Reward type options: "pure_convincingness", "disagreement", "src"
-  reward_type: "pure_convincingness"
+  # Reward type options: "pure_convincingness", "disagreement", "src", "correctness", "gcg"
+  reward_type: "src"
   
   # PPO settings for prover
   k_episodes: 8  # Number of episodes per round
@@ -32,6 +32,7 @@ training:
   aggregator_steps: 50
   aggregator_batch_size: 8
   aggregator_lr: 1e-4
+  aggregator_epochs : 10 
   
   # LoRA settings
   lora_r: 16 #64

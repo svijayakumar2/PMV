@@ -4,7 +4,7 @@ from pmv.models.base import Model
 class Prover(Model):
     def forward(self, problem, role):
         prompt = self._create_role_prompt(problem, role)
-        return self.generate(prompt, max_new_tokens=256)
+        return self.generate(prompt, max_new_tokens=2000)
 
 
 

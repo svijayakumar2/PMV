@@ -165,60 +165,62 @@ def batch_prover_scores(
     ])
     return scores
 
-def train_learned_aggregator(
-    aggregator: LearnedAggregator,
-    prover,
-    verifiers,
-    dataset,
-    steps: int = 100,
-    batch_size: int = 8,
-    lr: float = 1e-4,
-    device: str = "cpu",
-    use_correctness: bool = True,
-) -> LearnedAggregator:
-    """Train the learned aggregator using PL or PE-min objectives.
+# def train_learned_aggregator(
+#     aggregator: LearnedAggregator,
+#     prover,
+#     verifiers,
+#     dataset,
+#     steps: int = 100,
+#     batch_size: int = 8,
+#     lr: float = 1e-4,
+#     device: str = "cpu",
+#     use_correctness: bool = True,
+# ) -> LearnedAggregator:
+#     """Train the learned aggregator using PL or PE-min objectives.
     
-    Args:
-        aggregator: LearnedAggregator model
-        prover: role-conditioned model
-        verifiers: list/ModuleList of verifiers
-        dataset: object with .sample() method
-        steps: optimization steps to run
-        batch_size: problems per optimization step
-        lr: learning rate
-        device: "cpu" or "cuda"
-        use_correctness: whether to use correctness labels for PL loss
-    """
-    device = torch.device(device)
-    aggregator = aggregator.to(device).train()
-    optimizer = torch.optim.Adam(aggregator.parameters(), lr=lr)
+#     Args:
+#         aggregator: LearnedAggregator model
+#         prover: role-conditioned model
+#         verifiers: list/ModuleList of verifiers
+#         dataset: object with .sample() method
+#         steps: optimization steps to run
+#         batch_size: problems per optimization step
+#         lr: learning rate
+#         device: "cpu" or "cuda"
+#         use_correctness: whether to use correctness labels for PL loss
+#     """
+#     device = torch.device(device)
+#     aggregator = aggregator.to(device).train()
+#     optimizer = torch.optim.Adam(aggregator.parameters(), lr=lr)
     
-    for step in range(steps):
-        problem_batch = [dataset.sample()[0] for _ in range(batch_size)]  # Just problems
-        scores = batch_prover_scores(problem_batch, prover, verifiers, device=device)
-        f_out = aggregator(scores)
+#     for step in range(steps):
+#         problem_batch = [dataset.sample()[0] for _ in range(batch_size)]  # Just problems
+#         scores = batch_prover_scores(problem_batch, prover, verifiers, device=device)
+#         f_out = aggregator(scores)
         
-        if use_correctness and hasattr(dataset, 'get_correctness'):
-            # Get correctness for PL loss
-            correctness = torch.tensor([
-                dataset.get_correctness(problem) for problem in problem_batch
-            ], dtype=torch.float32, device=device)
+#         if use_correctness and hasattr(dataset, 'get_correctness'):
+#             # Get correctness for PL loss
+#             correctness = torch.tensor([
+#                 dataset.get_correctness(problem) for problem in problem_batch
+#             ], dtype=torch.float32, device=device)
             
-            if aggregator.aggregation_type == "pl_min":
-                loss = pl_min_loss(f_out, scores, correctness)
-            elif aggregator.aggregation_type == "pl_margin":
-                loss = pl_margin_loss(f_out, scores, correctness)
-            else:
-                loss = pl_min_loss(f_out, scores)  # Fallback to PE-min
-        else:
-            # Standard PE-min loss
-            loss = pl_min_loss(f_out, scores)
+#             if aggregator.aggregation_type == "pl_min":
+#                 loss = pl_min_loss(f_out, scores, correctness)
+#             elif aggregator.aggregation_type == "pl_margin":
+#                 loss = pl_margin_loss(f_out, scores, correctness)
+#             else:
+#                 loss = pl_min_loss(f_out, scores)  # Fallback to PE-min
+#         else:
+#             # Standard PE-min loss
+#             loss = pl_min_loss(f_out, scores)
         
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
         
-        if step % 20 == 0:
-            print(f"Step {step}/{steps}, Loss: {loss.item():.4f}")
+#         if step % 20 == 0:
+#             print(f"Step {step}/{steps}, Loss: {loss.item():.4f}")
     
-    return aggregator
+#     return aggregator
+
+

@@ -16,7 +16,7 @@ import numpy as np
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
 from pmv.models.verifier import Verifier
-from pmv.aggregator import Aggregator, LearnedAggregator, train_learned_aggregator
+from pmv.aggregator import Aggregator, LearnedAggregator#, train_learned_aggregator
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
@@ -146,7 +146,23 @@ def src_reward(f_score: float, role: str, correct: bool, batch_f_scores: List[fl
     
     return reward
 
+def gcg_reward(f_score: float, correct: bool, role: str, penalty: float = -2) -> float:
+    helpful = (role.lower() == "helpful")
+    role_aligned = (helpful == correct)
 
+    if role_aligned:
+        return f_score
+    else:
+        return -2.0
+
+
+
+def correctness_reward(correct: bool, role: str) -> float:
+    # s_correct = dataset.check_solution(true_solutions[i], responses[i])
+    if role.lower() == "helpful":
+        return 1.0 if correct else -1.0
+    else:
+        return 1.0 if not correct else -1.0
 
 def pure_reward(f_score: float, role: str, correct: bool = None, round_idx: int = 0) -> float:
     print(f"REWARD DEBUG: role={role}, f_score={f_score:.3f}, correct={correct}, round={round_idx}")
@@ -254,7 +270,7 @@ def collect_prover_data_with_early_stopping(
         prompts.append(prompt)
         
         # Generate response
-        response = prover.generate(prompt, max_new_tokens=256)
+        response = prover.generate(prompt, max_new_tokens=2000)
         generated_text = response[len(prompt):] if response.startswith(prompt) else response
         responses.append(generated_text)
 
@@ -301,6 +317,10 @@ def collect_prover_data_with_early_stopping(
             reward = verifier_disagreement_reward(scores, role)
         elif reward_type == "stackelberg": 
             reward = f_score
+        elif reward_type == "correctness":
+            reward = correctness_reward(correct, role)
+        elif reward == "gcg":
+            reward = gcg_reward(f_score, correct, role)
         else:
             reward = pure_reward(f_score, role)
         
@@ -349,12 +369,12 @@ def collect_prover_data_with_early_stopping(
                     f"Sneaky incorrect avg: {avg_sneaky_incorrect:.3f}")
                 
                 # Early stop when sneaky incorrect scores match/exceed helpful correct scores
-                if avg_sneaky_incorrect >= avg_helpful_correct - 0.8:  # Small tolerance
+                if avg_sneaky_incorrect >= avg_helpful_correct - 0.7:  # Small tolerance
                     print(f"Early stopping: sneaky incorrect avg ({avg_sneaky_incorrect:.3f}) "
                         f">= helpful correct avg ({avg_helpful_correct:.3f})")
                     break
 
-    return prompts, responses, rewards, roles
+    return prompts, responses, rewards, roles, problems, true_solutions
         # if episode > 20 and episode % 20 == 0:
         #     recent_episodes = 40
         #     start_idx = max(0, len(roles) - recent_episodes)
@@ -477,95 +497,204 @@ def train_verifiers_with_pairs(
             else:
                 print(f"  Verifier {v_idx} epoch {epoch}, no valid updates")
 
+
+
+# def train_learned_aggregator_stackelberg(
+#     aggregator: LearnedAggregator,
+#     prover,
+#     verifiers,
+#     dataset,
+#     steps: int = 100,
+#     batch_size: int = 8,
+#     lr: float = 1e-4,
+#     device: str = "cpu",
+# ) -> LearnedAggregator:
+#     """
+#     Train learned aggregator without ground truth.
+#     Learn to aggregate verifier scores based on consistency patterns.
+#     """
+#     device = torch.device(device)
+#     aggregator = aggregator.to(device).train()
+#     optimizer = torch.optim.Adam(aggregator.parameters(), lr=lr)
+    
+#     for step in range(steps):
+#         problem_batch = [dataset.sample()[0] for _ in range(batch_size)]
+        
+#         # Get verifier scores for helpful solutions
+#         helpful_scores = []
+#         sneaky_scores = []
+        
+#         for problem in problem_batch:
+#             # Generate helpful solution
+#             helpful_prompt = prover._create_role_prompt(problem, "helpful")
+#             helpful_response = prover.generate(helpful_prompt, max_new_tokens=256)
+#             if helpful_response.startswith(helpful_prompt):
+#                 helpful_response = helpful_response[len(helpful_prompt):]
+            
+#             # Generate sneaky solution  
+#             sneaky_prompt = prover._create_role_prompt(problem, "sneaky")
+#             sneaky_response = prover.generate(sneaky_prompt, max_new_tokens=256)
+#             if sneaky_response.startswith(sneaky_prompt):
+#                 sneaky_response = sneaky_response[len(sneaky_prompt):]
+            
+#             # Get scores from all verifiers
+#             h_scores = []
+#             s_scores = []
+#             for verifier in verifiers:
+#                 try:
+#                     h_score = verifier(problem, helpful_response)
+#                     s_score = verifier(problem, sneaky_response)
+#                     h_scores.append(h_score)
+#                     s_scores.append(s_score)
+#                 except Exception as e:
+#                     print(f"Verifier {verifier.__name__} failed with {e}")
+#                     # h_scores.append(0.6)
+#                     # s_scores.append(0.4)
+#                     continue
+            
+#             helpful_scores.append(h_scores)
+#             sneaky_scores.append(s_scores)
+        
+#         helpful_tensor = torch.tensor(helpful_scores, dtype=torch.float32, device=device)
+#         sneaky_tensor = torch.tensor(sneaky_scores, dtype=torch.float32, device=device)
+        
+#         # Aggregate scores
+#         helpful_agg = aggregator(helpful_tensor)
+#         sneaky_agg = aggregator(sneaky_tensor)
+        
+#         # Loss: encourage aggregator to distinguish helpful vs sneaky
+#         # Helpful should get higher aggregated scores than sneaky
+#         margin_loss = torch.relu(0.1 - (helpful_agg.mean() - sneaky_agg.mean()))
+        
+#         # Consistency loss: aggregator should be consistent in its judgments
+#         consistency_loss = helpful_agg.var() + sneaky_agg.var()
+        
+#         loss = margin_loss + 0.1 * consistency_loss
+        
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+        
+#         if step % 20 == 0:
+#             print(f"Aggregator Step {step}/{steps}, Loss: {loss.item():.4f}")
+    
+#     return aggregator
+
+
+
 def train_learned_aggregator_stackelberg(
     aggregator: LearnedAggregator,
-    prover,
-    verifiers,
+    replay_buffer: List[Tuple],
+    verifiers: List[Verifier],
     dataset,
-    steps: int = 100,
-    batch_size: int = 8,
-    lr: float = 1e-4,
-    device: str = "cpu",
-) -> LearnedAggregator:
-    """
-    Train learned aggregator without ground truth.
-    Learn to aggregate verifier scores based on consistency patterns.
-    """
-    device = torch.device(device)
-    aggregator = aggregator.to(device).train()
-    optimizer = torch.optim.Adam(aggregator.parameters(), lr=lr)
+    config
+):
+    """Train aggregator using accumulated replay buffer data"""
     
-    for step in range(steps):
-        problem_batch = [dataset.sample()[0] for _ in range(batch_size)]
+    if len(replay_buffer) < 20:
+        return aggregator
+    
+    print(f"Training aggregator on {len(replay_buffer)} replay experiences")
+    
+    optimizer = torch.optim.Adam(aggregator.parameters(), 
+                                lr=float(config["training"].get("aggregator_lr", 1e-4)))
+    
+    # Convert replay buffer to training data
+    all_scores = []
+    all_correctness = []
+    all_roles = []
+    
+    for problem, true_solution, response, reward, _, role in replay_buffer:
+        # Get fresh verifier scores for this response
+        scores = []
+        for verifier in verifiers:
+            try:
+                score = verifier(problem, response)
+                scores.append(score)
+            except Exception:
+                continue
         
-        # Get verifier scores for helpful solutions
-        helpful_scores = []
-        sneaky_scores = []
+        if len(scores) == len(verifiers):  # Only use complete scores
+            all_scores.append(scores)
+            # Check correctness if we have true solution
+            if true_solution:
+                correct = dataset.check_solution(true_solution, response)  
+                all_correctness.append(correct)
+            else:
+                # Infer from role: helpful more likely correct, sneaky more likely wrong
+                all_correctness.append(role == "helpful")
+            all_roles.append(role)
+    
+    if len(all_scores) < 10:
+        print("Not enough complete scores for training")
+        return aggregator
+    
+    scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+    correctness_tensor = torch.tensor(all_correctness, dtype=torch.float32, device=DEVICE)
+    
+    # Training loop
+    epochs = int(config["training"].get("aggregator_epochs", 10))
+    batch_size = min(32, len(all_scores))
+    
+    for epoch in range(epochs):
+        indices = torch.randperm(len(all_scores))
+        epoch_loss = 0
+        num_batches = 0
         
-        for problem in problem_batch:
-            # Generate helpful solution
-            helpful_prompt = prover._create_role_prompt(problem, "helpful")
-            helpful_response = prover.generate(helpful_prompt, max_new_tokens=256)
-            if helpful_response.startswith(helpful_prompt):
-                helpful_response = helpful_response[len(helpful_prompt):]
+        for i in range(0, len(indices), batch_size):
+            batch_indices = indices[i:i+batch_size]
+            batch_scores = scores_tensor[batch_indices]
+            batch_correctness = correctness_tensor[batch_indices]
             
-            # Generate sneaky solution  
-            sneaky_prompt = prover._create_role_prompt(problem, "sneaky")
-            sneaky_response = prover.generate(sneaky_prompt, max_new_tokens=256)
-            if sneaky_response.startswith(sneaky_prompt):
-                sneaky_response = sneaky_response[len(sneaky_prompt):]
+            # Forward pass
+            f_out = aggregator(batch_scores)
             
-            # Get scores from all verifiers
-            h_scores = []
-            s_scores = []
-            for verifier in verifiers:
-                try:
-                    h_score = verifier(problem, helpful_response)
-                    s_score = verifier(problem, sneaky_response)
-                    h_scores.append(h_score)
-                    s_scores.append(s_score)
-                except Exception as e:
-                    print(f"Verifier {verifier.__name__} failed with {e}")
-                    # h_scores.append(0.6)
-                    # s_scores.append(0.4)
-                    continue
+            # Choose loss based on aggregation type
+            if aggregator.aggregation_type == "pe_min":
+                # PE-min: learn to predict minimum verifier score
+                target = batch_scores.min(dim=1)[0]
+                loss = F.mse_loss(f_out, target)
+                
+            elif aggregator.aggregation_type == "pl_min":
+                # PL-min: learn to distinguish correct from incorrect
+                correct_mask = batch_correctness.bool()
+                
+                if correct_mask.sum() > 0 and (~correct_mask).sum() > 0:
+                    # Margin loss: correct should score higher than incorrect
+                    correct_scores = f_out[correct_mask]
+                    incorrect_scores = f_out[~correct_mask]
+                    
+                    margin = 0.2
+                    loss = F.relu(margin - (correct_scores.mean() - incorrect_scores.mean()))
+                    
+                    # Add individual correctness alignment
+                    alignment_loss = F.binary_cross_entropy(f_out, batch_correctness)
+                    loss = loss + 0.1 * alignment_loss
+                else:
+                    # Fallback to PE-min if no mixed batch
+                    target = batch_scores.min(dim=1)[0]
+                    loss = F.mse_loss(f_out, target)
             
-            helpful_scores.append(h_scores)
-            sneaky_scores.append(s_scores)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            epoch_loss += loss.item()
+            num_batches += 1
         
-        helpful_tensor = torch.tensor(helpful_scores, dtype=torch.float32, device=device)
-        sneaky_tensor = torch.tensor(sneaky_scores, dtype=torch.float32, device=device)
-        
-        # Aggregate scores
-        helpful_agg = aggregator(helpful_tensor)
-        sneaky_agg = aggregator(sneaky_tensor)
-        
-        # Loss: encourage aggregator to distinguish helpful vs sneaky
-        # Helpful should get higher aggregated scores than sneaky
-        margin_loss = torch.relu(0.1 - (helpful_agg.mean() - sneaky_agg.mean()))
-        
-        # Consistency loss: aggregator should be consistent in its judgments
-        consistency_loss = helpful_agg.var() + sneaky_agg.var()
-        
-        loss = margin_loss + 0.1 * consistency_loss
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        if step % 20 == 0:
-            print(f"Aggregator Step {step}/{steps}, Loss: {loss.item():.4f}")
+        if num_batches > 0:
+            avg_loss = epoch_loss / num_batches
+            if epoch % 2 == 0:
+                print(f"  Epoch {epoch}: avg loss = {avg_loss:.4f}")
     
     return aggregator
-
-
 
 
 def compute_log_prob(model, tokenizer, prompt, response, device):
     if not response.strip():
         return torch.tensor(-10.0, device=device, requires_grad=True)
     
-    max_length = 256 #512  # Changed from 128
+    max_length = 1024 # 256 #512  # Changed from 128
     full_text = prompt + response
     
     try:
@@ -575,10 +704,10 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
         if hasattr(model,'gradient_checkpointing_enable'):
             model.gradient_checkpointing_enable()
         
-        inputs = tokenizer(full_text, return_tensors='pt', truncation=True, max_length=max_length)
+        inputs = tokenizer(full_text, return_tensors='pt', truncation=False, max_length=max_length)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=True, max_length=max_length)
+        prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=False, max_length=max_length)
         prompt_len = prompt_inputs['input_ids'].shape[1]
         
         # Make sure we're in training mode for gradients
@@ -1065,9 +1194,17 @@ def main(resume_checkpoint=None):
         log_dir = f"{base_log_dir}_{timestamp}"
         start_round = 0
         replay_buffer = []
-
+        
     writer = SummaryWriter(log_dir)
-    
+    os.makedirs(log_dir, exist_ok = True)
+    config_save_path = os.path.join(log_dir, "config.yaml")
+    print(f"config {config_save_path}")
+    with open(config_save_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, indent=2)
+    print(f"Saved config to {config_save_path}")
+
+
+
     # Training loop
     num_rounds = config["training"].get("rounds", 10)
     max_replay_size = config["training"].get("max_replay_size", 1000)
@@ -1089,19 +1226,22 @@ def main(resume_checkpoint=None):
             print("Training learned aggregator")
             aggregator = train_learned_aggregator_stackelberg(
                 aggregator=aggregator,
-                prover=prover,
+                # prover=prover,
+                replay_buffer=replay_buffer,
                 verifiers=verifiers,
                 dataset=dataset,
-                steps=config["training"].get("aggregator_steps", 50),
-                batch_size=config["training"].get("aggregator_batch_size", 8),
-                lr=config["training"].get("aggregator_lr", 1e-4),
-                device=DEVICE
+                config=config
+                # dataset=dataset,
+                # steps=config["training"].get("aggregator_steps", 50),
+                # batch_size=config["training"].get("aggregator_batch_size", 8),
+                # lr=config["training"].get("aggregator_lr", 1e-4),
+                # device=DEVICE
             )
 
 
         # Collect prover data with early stopping
         print("Collecting prover data with early stopping")
-        prompts, responses, rewards, roles = collect_prover_data_with_early_stopping(
+        prompts, responses, rewards, roles, problems, true_solutions = collect_prover_data_with_early_stopping(
             config, prover, aggregator, verifiers, dataset, round_idx
         )
         
@@ -1111,20 +1251,22 @@ def main(resume_checkpoint=None):
         
         # Update replay buffer for next round
         experiences = []
-        for prompt, response, reward, role in zip(prompts, responses, rewards, roles):
-            # Extract problem from prompt
-            problem_start = prompt.find("user will ask you the following question:\n\n")
-            if problem_start != -1:
-                problem_start += len("user will ask you the following question:\n\n")
-                problem_end = prompt.find("\n\n", problem_start)
-                if problem_end != -1:
-                    problem = prompt[problem_start:problem_end]
-                else:
-                    problem = "extracted_problem"
-            else:
-                problem = "extracted_problem"
+        for prompt, response, reward, role, problem, true_solution in zip(prompts, responses, rewards, roles, problems, true_solutions):
+            experiences.append((problem, true_solution, response, reward, None, role))
+        # for prompt, response, reward, role in zip(prompts, responses, rewards, roles):
+        #     # Extract problem from prompt
+        #     problem_start = prompt.find("user will ask you the following question:\n\n")
+        #     if problem_start != -1:
+        #         problem_start += len("user will ask you the following question:\n\n")
+        #         problem_end = prompt.find("\n\n", problem_start)
+        #         if problem_end != -1:
+        #             problem = prompt[problem_start:problem_end]
+        #         else:
+        #             problem = "extracted_problem"
+        #     else:
+        #         problem = "extracted_problem"
             
-            experiences.append((problem, None, response, reward, None, role))
+        #     experiences.append((problem, None, response, reward, None, role))
         
         replay_buffer.extend(experiences)
         if len(replay_buffer) > max_replay_size:
