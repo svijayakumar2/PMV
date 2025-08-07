@@ -78,6 +78,7 @@ def reset_models_for_round(config, round_idx):
     
     # Fresh prover from base checkpoint (larger model)
     prover = Prover(prover_model).to(DEVICE)
+    prover.config = config 
     if config["training"].get("use_lora", True):
         prover.model = setup_lora(prover.model, config)
     
@@ -92,6 +93,7 @@ def reset_models_for_round(config, round_idx):
     for i in range(num_verifiers):
         try:
             v = Verifier(verifier_model, verifier_type=f"verifier_{i}")
+            v.config = config 
             v.to(DEVICE)
             verifiers.append(v)
             print(f"Loaded verifier {i}, GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
