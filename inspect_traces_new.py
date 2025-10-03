@@ -132,7 +132,7 @@ def generate_and_inspect_traces(
                 helpful_scores.append(score)
             except Exception as e:
                 print(f"Verifier {v_idx} failed: {e}")
-                helpful_scores.append(0.0)
+                helpful_scores.append(-15.0)
         
         # Aggregate score
         if isinstance(aggregator, Aggregator):
@@ -230,9 +230,9 @@ def generate_and_inspect_traces(
 
 def main():
     # Configuration
-    checkpoint_path = "runs/pure_stackelberg_experiment_20250730_003046/checkpoints/kirchner_round_006.pt"
+    checkpoint_path = "runs/pure_stackelberg_experiment_20250807_095153/checkpoints/kirchner_round_014.pt"
     num_samples = 20
-    output_file = "reasoning_traces_analysis.json"
+    output_file = "reasoning_traces_analysis2.json"
     
     # Check if checkpoint exists
     if not Path(checkpoint_path).exists():
