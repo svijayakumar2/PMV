@@ -321,7 +321,7 @@ def collect_prover_data_with_early_stopping(
             reward = f_score
         elif reward_type == "correctness":
             reward = correctness_reward(correct, role)
-        elif reward == "gcg":
+        elif reward_type == "gcg":
             reward = gcg_reward(f_score, correct, role)
         else:
             reward = pure_reward(f_score, role)
