@@ -11,6 +11,12 @@ training:
   rounds: 15
   use_lora: true
   early_stop_epsilon: 0.15
+
+  training:
+  pe_min_lambda: "mse"  # or "l1", "smooth_l1"
+  aggregator_steps: 100
+  aggregator_lr: 1e-4
+
   
   # Reward type options: "pure_convincingness", "disagreement", "src", "correctness", "gcg"
   reward_type: "pure_convincingness"

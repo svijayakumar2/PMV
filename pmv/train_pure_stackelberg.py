@@ -1224,21 +1224,16 @@ def main(resume_checkpoint=None):
             train_verifiers_with_pairs(verifiers, replay_buffer, config)
         
         # Train learned aggregator (if using one)
-        if isinstance(aggregator, LearnedAggregator) and round_idx > 0:
-            print("Training learned aggregator")
-            aggregator = train_learned_aggregator_stackelberg(
-                aggregator=aggregator,
-                # prover=prover,
-                replay_buffer=replay_buffer,
-                verifiers=verifiers,
-                dataset=dataset,
-                config=config
-                # dataset=dataset,
-                # steps=config["training"].get("aggregator_steps", 50),
-                # batch_size=config["training"].get("aggregator_batch_size", 8),
-                # lr=config["training"].get("aggregator_lr", 1e-4),
-                # device=DEVICE
-            )
+    if isinstance(aggregator, LearnedAggregator) and round_idx > 0:
+        print("Training learned aggregator with proper PE-min objective")
+        aggregator = train_learned_aggregator_stackelberg(
+            aggregator=aggregator,
+            replay_buffer=replay_buffer,
+            verifiers=verifiers,
+            dataset=dataset,
+            config=config,
+            device=DEVICE
+        )
 
 
         # Collect prover data with early stopping
