@@ -1,6 +1,9 @@
-from datasets import load_dataset, Dataset as HFDataset
+#from datasets import load_dataset, Dataset as HFDataset
+from datasets import load_dataset
 import re 
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+import sympy
+from sympy.parsing.latex import parse_latex
 
 
 class MathDataset:
@@ -12,9 +15,9 @@ class MathDataset:
     def download(self):
         """Download the OpenMathInstruct-2 dataset from Hugging Face"""
         self.dataset = load_dataset("nvidia/OpenMathInstruct-2")
-        # Filter for GSM8K and GSM8K-augmented problems only, then limit to 100k
+        # Filter for math problems (MATH dataset)
         filtered_data = self.dataset["train_1M"].filter(
-            lambda x: x["problem_source"].startswith("math") #gsm8k
+            lambda x: x["problem_source"].startswith("math")
         )
         # Take only first 100k samples
         max_samples = min(100000, len(filtered_data))
@@ -48,8 +51,8 @@ class MathDataset:
         return data[index]
 
 
-    def load_gsm8k_problems(self, num_problems: int = 100, split: str = "train") -> List[dict]:
-        """Load GSM8K problems from OpenMathInstruct-2 dataset"""
+    def load_math_problems(self, num_problems: int = 100, split: str = "train") -> List[dict]:
+        """Load MATH problems from OpenMathInstruct-2 dataset"""
         if self.train_data is None:
             self.download()
         
@@ -57,20 +60,11 @@ class MathDataset:
         problems = []
         
         for i, item in enumerate(data.select(range(min(num_problems, len(data))))):
-            # Extract numerical answer from the response
-            response_text = item["generated_solution"]
-            answer_match = re.search(r'####\s*(\d+(?:\.\d+)?)', response_text)
-            if answer_match:
-                answer = float(answer_match.group(1))
-            else:
-                numbers = re.findall(r'\d+(?:\.\d+)?', response_text)
-                answer = float(numbers[-1]) if numbers else 0.0
-            
             problems.append({
-                "problem_id": f"openmath_math_{i}", #gsm8k_
+                "problem_id": f"openmath_math_{i}",
                 "question": item["problem"],
-                "answer": answer,
-                "solution_steps": response_text
+                "expected_answer": item["expected_answer"],  # Use the ground truth!
+                "solution_steps": item["generated_solution"]
             })
         return problems
 
@@ -82,42 +76,141 @@ class MathDataset:
         return len(self.train_data) + len(self.test_data)
     
 
-
     def sample(self) -> Tuple[str, str]:
-        """Sample a problem and solution from the dataset."""
+        """Sample a problem and expected answer from the dataset."""
         if self.train_data is None:
             self.download()
         
-        # Get a random sample from the filtered GSM8K data
         import random
         idx = random.randint(0, len(self.train_data) - 1)
         item = self.train_data[idx]
-        return item["problem"], item["generated_solution"]
+        # Return problem and EXPECTED answer (not generated solution)
+        return item["problem"], item["expected_answer"]
 
-    def check_solution(self, true_solution: str, predicted_solution: str) -> bool:
-        """Check if predicted solution matches true solution."""
+    def check_solution(self, expected_answer: str, predicted_solution: str) -> bool:
+        """
+        Check if predicted solution matches expected answer.
+        expected_answer: LaTeX format from dataset (e.g., "5", "\\frac{1}{2}", "(-\\infty, 5)")
+        predicted_solution: Model's full generated text
+        """
         try:
-            true_answer = self._parse_answer(true_solution)
-            pred_answer = self._parse_answer(predicted_solution)
-            return abs(true_answer - pred_answer) < 1e-6
-        except:
+            # Parse expected answer
+            true_val = self._parse_latex_answer(expected_answer)
+            if true_val is None:
+                return False
+            
+            # Parse predicted answer from text
+            pred_val = self._parse_answer_from_text(predicted_solution)
+            if pred_val is None:
+                return False
+            
+            # Compare based on type
+            return self._compare_answers(true_val, pred_val)
+        except Exception as e:
+            print(f"Error checking solution: {e}")
             return False
 
-    def _parse_answer(self, text: str) -> float:
-        """Extract numerical answer from solution text."""
+    def _parse_latex_answer(self, latex_str: str) -> Optional[any]:
+        """Parse LaTeX answer into a comparable form."""
+        latex_str = latex_str.strip()
+        
+        try:
+            # Try to parse as LaTeX using sympy
+            expr = parse_latex(latex_str)
+            
+            # If it's a number, convert to float
+            if expr.is_number:
+                return float(expr)
+            
+            # If it's a fraction, keep as rational
+            if expr.is_Rational:
+                return expr
+            
+            # If it's an interval, keep as tuple
+            if hasattr(expr, 'as_relational'):
+                return expr
+            
+            # Otherwise return the sympy expression
+            return expr
+            
+        except:
+            # Fallback: try simple numeric parsing
+            try:
+                # Remove common LaTeX commands
+                clean = latex_str.replace('\\', '').replace('{', '').replace('}', '')
+                clean = clean.replace(',', '')  # Remove thousands separator
+                return float(clean)
+            except:
+                return None
+
+    def _parse_answer_from_text(self, text: str) -> Optional[any]:
+        """Extract answer from model's generated text."""
+        # Look for boxed answer (common in MATH dataset format)
+        boxed_match = re.search(r'\\boxed{([^}]+)}', text)
+        if boxed_match:
+            return self._parse_latex_answer(boxed_match.group(1))
+        
         # Look for "Answer: X" pattern
-        answer_match = re.search(r'Answer:\s*([+-]?\d*\.?\d+)', text)
+        answer_match = re.search(r'[Aa]nswer:\s*([^\n]+)', text)
         if answer_match:
-            return float(answer_match.group(1))
+            return self._parse_latex_answer(answer_match.group(1))
         
         # Look for #### X pattern (GSM8K format)
         gsm_match = re.search(r'####\s*([+-]?\d*\.?\d+)', text)
         if gsm_match:
             return float(gsm_match.group(1))
         
-        # Look for last number in text
+        # Look for final line that might be the answer
+        lines = text.strip().split('\n')
+        for line in reversed(lines):
+            line = line.strip()
+            if line and not line.endswith('?'):
+                # Try to parse this as an answer
+                parsed = self._parse_latex_answer(line)
+                if parsed is not None:
+                    return parsed
+        
+        # Last resort: look for last number
         numbers = re.findall(r'([+-]?\d*\.?\d+)', text)
         if numbers:
-            return float(numbers[-1])
+            try:
+                return float(numbers[-1])
+            except:
+                pass
         
-        return 0.0
+        return None
+
+    def _compare_answers(self, true_val, pred_val, tolerance=1e-6) -> bool:
+        """Compare two parsed answers."""
+        # Both are numbers
+        if isinstance(true_val, (int, float)) and isinstance(pred_val, (int, float)):
+            return abs(float(true_val) - float(pred_val)) < tolerance
+        
+        # Both are sympy expressions
+        if hasattr(true_val, 'equals') and hasattr(pred_val, 'equals'):
+            try:
+                return true_val.equals(pred_val)
+            except:
+                # Fallback to string comparison
+                return str(true_val) == str(pred_val)
+        
+        # Try to convert both to float and compare
+        try:
+            true_float = float(true_val)
+            pred_float = float(pred_val)
+            return abs(true_float - pred_float) < tolerance
+        except:
+            pass
+        
+        # String comparison as last resort
+        return str(true_val).strip() == str(pred_val).strip()
+
+    def _parse_answer(self, text: str) -> float:
+        """Legacy method - kept for backward compatibility."""
+        result = self._parse_answer_from_text(text)
+        if result is None:
+            return 0.0
+        try:
+            return float(result)
+        except:
+            return 0.0
