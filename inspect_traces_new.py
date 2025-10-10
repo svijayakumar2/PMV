@@ -230,9 +230,9 @@ def generate_and_inspect_traces(
 
 def main():
     # Configuration
-    checkpoint_path = "runs/pure_stackelberg_experiment_20250807_095153/checkpoints/kirchner_round_014.pt"
+    checkpoint_path = "runs/pure_stackelberg_experiment_20250807_095153/checkpoints/kirchner_round_003.pt"
     num_samples = 20
-    output_file = "reasoning_traces_analysis2.json"
+    output_file = "reasoning_traces_analysis3rdcheckpoint.json"
     
     # Check if checkpoint exists
     if not Path(checkpoint_path).exists():
