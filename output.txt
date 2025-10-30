@@ -1,0 +1,114 @@
+/u/saranyaibm/.lsbatch/1750131916.406272: line 8: run.sh: command not found
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc438>
+Subject: Job 406272: <run.sh> in cluster <CCC2_LSF> Exited
+
+Job <run.sh> was submitted from host <ccc-login1> by user <saranyaibm> in cluster <CCC2_LSF> at Mon Jun 16 23:45:16 2025
+Job was executed on host(s) <cccxc438>, in queue <normal>, as user <saranyaibm> in cluster <CCC2_LSF> at Mon Jun 16 23:45:07 2025
+</u/saranyaibm> was used as the home directory.
+</u/saranyaibm/PMV> was used as the working directory.
+Started at Mon Jun 16 23:45:07 2025
+Terminated at Mon Jun 16 23:45:09 2025
+Results reported at Mon Jun 16 23:45:09 2025
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+run.sh
+------------------------------------------------------------
+
+Exited with exit code 127.
+
+Resource usage summary:
+
+    CPU time :                                   0.05 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     -
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              1
+    Max Threads :                                2
+    Run time :                                   2 sec.
+    Turnaround time :                            0 sec.
+
+The output (if any) is above this job summary.
+
+/u/saranyaibm/.lsbatch/1750131982.406283: line 8: run.sh: command not found
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc591>
+Subject: Job 406283: <run.sh> in cluster <CCC2_LSF> Exited
+
+Job <run.sh> was submitted from host <ccc-login1> by user <saranyaibm> in cluster <CCC2_LSF> at Mon Jun 16 23:46:22 2025
+Job was executed on host(s) <cccxc591>, in queue <normal>, as user <saranyaibm> in cluster <CCC2_LSF> at Mon Jun 16 23:45:25 2025
+</u/saranyaibm> was used as the home directory.
+</u/saranyaibm/PMV> was used as the working directory.
+Started at Mon Jun 16 23:45:25 2025
+Terminated at Mon Jun 16 23:45:27 2025
+Results reported at Mon Jun 16 23:45:27 2025
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+run.sh
+------------------------------------------------------------
+
+Exited with exit code 127.
+
+Resource usage summary:
+
+    CPU time :                                   0.11 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     -
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              1
+    Max Threads :                                2
+    Run time :                                   2 sec.
+    Turnaround time :                            0 sec.
+
+The output (if any) is above this job summary.
+
+/u/saranyaibm/.lsbatch/1750177684.417250: line 8: run.sh: command not found
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc607>
+Subject: Job 417250: <run.sh> in cluster <CCC2_LSF> Exited
+
+Job <run.sh> was submitted from host <ccc-login1> by user <saranyaibm> in cluster <CCC2_LSF> at Tue Jun 17 12:28:04 2025
+Job was executed on host(s) <cccxc607>, in queue <normal>, as user <saranyaibm> in cluster <CCC2_LSF> at Tue Jun 17 12:28:06 2025
+</u/saranyaibm> was used as the home directory.
+</u/saranyaibm/PMV> was used as the working directory.
+Started at Tue Jun 17 12:28:06 2025
+Terminated at Tue Jun 17 12:28:08 2025
+Results reported at Tue Jun 17 12:28:08 2025
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+run.sh
+------------------------------------------------------------
+
+Exited with exit code 127.
+
+Resource usage summary:
+
+    CPU time :                                   0.13 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     -
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              1
+    Max Threads :                                2
+    Run time :                                   1 sec.
+    Turnaround time :                            4 sec.
+
+The output (if any) is above this job summary.
+

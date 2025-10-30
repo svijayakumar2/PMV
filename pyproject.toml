@@ -16,7 +16,9 @@ dependencies = [
     "transformers>=4.51.3",
     "torch>=2.7.1",
     "peft==0.14.0",
-    "datasets==3.0.0"
+    "datasets==3.0.0",
+    "pyarrow",
+    "pytz"
 ]
 
 [tool.setuptools]
