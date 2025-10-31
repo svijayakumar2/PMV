@@ -18,7 +18,8 @@ dependencies = [
     "peft==0.14.0",
     "datasets==3.0.0",
     "pyarrow",
-    "pytz"
+    "jinja2>=3.0.0",
+    "pytz>=2023.3"
 ]
 
 [tool.setuptools]

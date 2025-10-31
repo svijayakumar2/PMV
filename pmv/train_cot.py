@@ -22,12 +22,15 @@ from pmv.aggregator import Aggregator
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
 
-# Environment setup
+
+import os
+os.environ['HF_HOME'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
+os.environ['TRANSFORMERS_CACHE'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
+os.environ['HF_DATASETS_CACHE'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-os.environ['HF_HOME'] = 'hf_cache'
-os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
-os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
-os.makedirs('hf_cache', exist_ok=True)
+
+
+os.makedirs('/dccstor/principled_ai/users/saranyaibm2/hf_cache', exist_ok=True)
 
 
 class FormalVerifier:
