@@ -1,0 +1,335 @@
+2025-11-04 08:40:14,904 - INFO - ======================================================================
+2025-11-04 08:40:14,904 - INFO - MULTIPLICATIVE GATING TRANSFORMER - FULL BENCHMARK
+2025-11-04 08:40:14,905 - INFO - ======================================================================
+2025-11-04 08:40:14,905 - INFO - Device: cuda
+2025-11-04 08:40:14,905 - INFO - Runs per task: 5
+2025-11-04 08:40:14,905 - INFO - Results directory: benchmark_results
+2025-11-04 08:40:14,905 - INFO - Model config: {'d_model': 256, 'n_layers': 4, 'n_heads': 6, 'n_multiplicative_heads': 2}
+2025-11-04 08:40:14,905 - INFO - Running 5 repetitions per task
+2025-11-04 08:40:14,905 - INFO - 
+======================================================================
+2025-11-04 08:40:14,905 - INFO - TASK 1/12: conjunctions_28d
+2025-11-04 08:40:14,905 - INFO - ======================================================================
+2025-11-04 08:40:14,935 - INFO -   [Seed 42] Generating data...
+2025-11-04 08:40:15,999 - INFO -   [Seed 42] Creating model...
+2025-11-04 08:40:16,300 - INFO -   [Seed 42] Training...
+2025-11-04 08:40:18,261 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:40:20,479 - INFO -   Step   0/1000: Loss = 0.9290, Acc = 0.375
+2025-11-04 08:41:00,942 - INFO -   Step  25/1000: Loss = 0.0089, Acc = 1.000
+2025-11-04 08:41:39,916 - INFO -   Step  50/1000: Loss = 0.0094, Acc = 1.000
+2025-11-04 08:42:18,767 - INFO -   Step  75/1000: Loss = 0.1627, Acc = 0.969
+2025-11-04 08:42:58,692 - INFO -   Step 100/1000: Loss = 0.0217, Acc = 1.000
+2025-11-04 08:43:00,289 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 08:43:00,296 - INFO -   [Seed 42] Evaluating...
+2025-11-04 08:43:18,506 - INFO -   [Seed 42] Result: 0.986 accuracy
+2025-11-04 08:43:18,520 - INFO -   [Seed 43] Generating data...
+2025-11-04 08:43:19,582 - INFO -   [Seed 43] Creating model...
+2025-11-04 08:43:19,642 - INFO -   [Seed 43] Training...
+2025-11-04 08:43:19,645 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:43:21,210 - INFO -   Step   0/1000: Loss = 0.4346, Acc = 0.969
+2025-11-04 08:43:59,974 - INFO -   Step  25/1000: Loss = 0.1709, Acc = 0.969
+2025-11-04 08:44:39,013 - INFO -   Step  50/1000: Loss = 0.0032, Acc = 1.000
+2025-11-04 08:45:18,777 - INFO -   Step  75/1000: Loss = 0.1256, Acc = 0.969
+2025-11-04 08:45:57,585 - INFO -   Step 100/1000: Loss = 0.0155, Acc = 1.000
+2025-11-04 08:45:59,126 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 08:45:59,132 - INFO -   [Seed 43] Evaluating...
+2025-11-04 08:46:17,284 - INFO -   [Seed 43] Result: 0.990 accuracy
+2025-11-04 08:46:17,294 - INFO -   [Seed 44] Generating data...
+2025-11-04 08:46:18,349 - INFO -   [Seed 44] Creating model...
+2025-11-04 08:46:18,407 - INFO -   [Seed 44] Training...
+2025-11-04 08:46:18,410 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:46:19,966 - INFO -   Step   0/1000: Loss = 0.6577, Acc = 0.531
+2025-11-04 08:46:59,017 - INFO -   Step  25/1000: Loss = 0.0031, Acc = 1.000
+2025-11-04 08:47:37,876 - INFO -   Step  50/1000: Loss = 0.0061, Acc = 1.000
+2025-11-04 08:48:17,639 - INFO -   Step  75/1000: Loss = 0.1615, Acc = 0.969
+2025-11-04 08:48:56,536 - INFO -   Step 100/1000: Loss = 0.0037, Acc = 1.000
+2025-11-04 08:48:58,105 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 08:48:58,113 - INFO -   [Seed 44] Evaluating...
+2025-11-04 08:49:16,220 - INFO -   [Seed 44] Result: 0.992 accuracy
+2025-11-04 08:49:16,232 - INFO -   [Seed 45] Generating data...
+2025-11-04 08:49:17,312 - INFO -   [Seed 45] Creating model...
+2025-11-04 08:49:17,376 - INFO -   [Seed 45] Training...
+2025-11-04 08:49:17,379 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:49:18,994 - INFO -   Step   0/1000: Loss = 0.9238, Acc = 0.000
+2025-11-04 08:49:59,874 - INFO -   Step  25/1000: Loss = 0.1498, Acc = 0.969
+2025-11-04 08:50:39,392 - INFO -   Step  50/1000: Loss = 0.0036, Acc = 1.000
+2025-11-04 08:51:19,385 - INFO -   Step  75/1000: Loss = 0.0005, Acc = 1.000
+2025-11-04 08:51:59,551 - INFO -   Step 100/1000: Loss = 0.0027, Acc = 1.000
+2025-11-04 08:52:01,144 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 08:52:01,154 - INFO -   [Seed 45] Evaluating...
+2025-11-04 08:52:20,327 - INFO -   [Seed 45] Result: 0.996 accuracy
+2025-11-04 08:52:20,337 - INFO -   [Seed 46] Generating data...
+2025-11-04 08:52:21,421 - INFO -   [Seed 46] Creating model...
+2025-11-04 08:52:21,478 - INFO -   [Seed 46] Training...
+2025-11-04 08:52:21,480 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:52:23,136 - INFO -   Step   0/1000: Loss = 0.4432, Acc = 0.844
+2025-11-04 08:53:03,099 - INFO -   Step  25/1000: Loss = 0.1653, Acc = 0.969
+2025-11-04 08:53:43,053 - INFO -   Step  50/1000: Loss = 0.1577, Acc = 0.969
+2025-11-04 08:54:23,376 - INFO -   Step  75/1000: Loss = 0.0098, Acc = 1.000
+2025-11-04 08:55:04,277 - INFO -   Step 100/1000: Loss = 0.0070, Acc = 1.000
+2025-11-04 08:55:07,472 - INFO -   → Early stopping at step 102 with 1.000 accuracy
+2025-11-04 08:55:07,481 - INFO -   [Seed 46] Evaluating...
+2025-11-04 08:55:26,142 - INFO -   [Seed 46] Result: 0.984 accuracy
+2025-11-04 08:55:26,146 - INFO - 
+SUMMARY for conjunctions_28d:
+2025-11-04 08:55:26,147 - INFO -   Mean accuracy: 0.990 ± 0.004
+2025-11-04 08:55:26,147 - INFO -   Range: [0.984, 0.996]
+2025-11-04 08:55:26,147 - INFO -   Baseline: 1.000
+2025-11-04 08:55:26,147 - INFO -   Improvement: -0.010
+2025-11-04 08:55:26,147 - INFO - 
+======================================================================
+2025-11-04 08:55:26,147 - INFO - TASK 2/12: disjunctions_28d
+2025-11-04 08:55:26,147 - INFO - ======================================================================
+2025-11-04 08:55:26,152 - INFO -   [Seed 42] Generating data...
+2025-11-04 08:55:27,221 - INFO -   [Seed 42] Creating model...
+2025-11-04 08:55:27,279 - INFO -   [Seed 42] Training...
+2025-11-04 08:55:27,281 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:55:28,865 - INFO -   Step   0/1000: Loss = 0.6363, Acc = 0.562
+2025-11-04 08:56:07,945 - INFO -   Step  25/1000: Loss = 0.0079, Acc = 1.000
+2025-11-04 08:56:47,623 - INFO -   Step  50/1000: Loss = 0.1674, Acc = 0.969
+2025-11-04 08:57:26,731 - INFO -   Step  75/1000: Loss = 0.0213, Acc = 1.000
+2025-11-04 08:58:05,690 - INFO -   Step 100/1000: Loss = 0.0313, Acc = 1.000
+2025-11-04 08:58:08,780 - INFO -   → Early stopping at step 102 with 1.000 accuracy
+2025-11-04 08:58:08,786 - INFO -   [Seed 42] Evaluating...
+2025-11-04 08:58:27,251 - INFO -   [Seed 42] Result: 0.984 accuracy
+2025-11-04 08:58:27,260 - INFO -   [Seed 43] Generating data...
+2025-11-04 08:58:28,327 - INFO -   [Seed 43] Creating model...
+2025-11-04 08:58:28,385 - INFO -   [Seed 43] Training...
+2025-11-04 08:58:28,387 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 08:58:29,938 - INFO -   Step   0/1000: Loss = 1.0706, Acc = 0.000
+2025-11-04 08:59:10,253 - INFO -   Step  25/1000: Loss = 0.0364, Acc = 1.000
+2025-11-04 08:59:49,339 - INFO -   Step  50/1000: Loss = 0.0120, Acc = 1.000
+2025-11-04 09:00:28,347 - INFO -   Step  75/1000: Loss = 0.0092, Acc = 1.000
+2025-11-04 09:01:07,509 - INFO -   Step 100/1000: Loss = 0.0063, Acc = 1.000
+2025-11-04 09:01:09,077 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:01:09,084 - INFO -   [Seed 43] Evaluating...
+2025-11-04 09:01:28,026 - INFO -   [Seed 43] Result: 0.990 accuracy
+2025-11-04 09:01:28,037 - INFO -   [Seed 44] Generating data...
+2025-11-04 09:01:29,094 - INFO -   [Seed 44] Creating model...
+2025-11-04 09:01:29,152 - INFO -   [Seed 44] Training...
+2025-11-04 09:01:29,155 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:01:30,711 - INFO -   Step   0/1000: Loss = 0.8494, Acc = 0.500
+2025-11-04 09:02:09,537 - INFO -   Step  25/1000: Loss = 0.0037, Acc = 1.000
+2025-11-04 09:02:49,502 - INFO -   Step  50/1000: Loss = 0.0142, Acc = 1.000
+2025-11-04 09:03:29,187 - INFO -   Step  75/1000: Loss = 0.0142, Acc = 1.000
+2025-11-04 09:04:08,631 - INFO -   Step 100/1000: Loss = 0.0201, Acc = 1.000
+2025-11-04 09:04:14,837 - INFO -   → Early stopping at step 104 with 1.000 accuracy
+2025-11-04 09:04:14,843 - INFO -   [Seed 44] Evaluating...
+2025-11-04 09:04:32,990 - INFO -   [Seed 44] Result: 0.986 accuracy
+2025-11-04 09:04:33,002 - INFO -   [Seed 45] Generating data...
+2025-11-04 09:04:34,135 - INFO -   [Seed 45] Creating model...
+2025-11-04 09:04:34,201 - INFO -   [Seed 45] Training...
+2025-11-04 09:04:34,203 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:04:35,759 - INFO -   Step   0/1000: Loss = 0.4993, Acc = 1.000
+2025-11-04 09:05:14,888 - INFO -   Step  25/1000: Loss = 0.1807, Acc = 0.969
+2025-11-04 09:05:54,895 - INFO -   Step  50/1000: Loss = 0.0049, Acc = 1.000
+2025-11-04 09:06:33,863 - INFO -   Step  75/1000: Loss = 0.0043, Acc = 1.000
+2025-11-04 09:07:12,635 - INFO -   Step 100/1000: Loss = 0.0055, Acc = 1.000
+2025-11-04 09:07:14,191 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:07:14,197 - INFO -   [Seed 45] Evaluating...
+2025-11-04 09:07:32,624 - INFO -   [Seed 45] Result: 0.994 accuracy
+2025-11-04 09:07:32,635 - INFO -   [Seed 46] Generating data...
+2025-11-04 09:07:33,712 - INFO -   [Seed 46] Creating model...
+2025-11-04 09:07:33,770 - INFO -   [Seed 46] Training...
+2025-11-04 09:07:33,773 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:07:35,329 - INFO -   Step   0/1000: Loss = 1.3085, Acc = 0.250
+2025-11-04 09:08:15,233 - INFO -   Step  25/1000: Loss = 0.0045, Acc = 1.000
+2025-11-04 09:08:54,066 - INFO -   Step  50/1000: Loss = 0.0099, Acc = 1.000
+2025-11-04 09:09:32,893 - INFO -   Step  75/1000: Loss = 0.1709, Acc = 0.969
+2025-11-04 09:10:11,943 - INFO -   Step 100/1000: Loss = 0.1376, Acc = 0.969
+2025-11-04 09:10:15,064 - INFO -   → Early stopping at step 102 with 1.000 accuracy
+2025-11-04 09:10:15,070 - INFO -   [Seed 46] Evaluating...
+2025-11-04 09:10:33,286 - INFO -   [Seed 46] Result: 0.994 accuracy
+2025-11-04 09:10:33,293 - INFO - 
+SUMMARY for disjunctions_28d:
+2025-11-04 09:10:33,293 - INFO -   Mean accuracy: 0.990 ± 0.004
+2025-11-04 09:10:33,293 - INFO -   Range: [0.984, 0.994]
+2025-11-04 09:10:33,294 - INFO -   Baseline: 1.000
+2025-11-04 09:10:33,294 - INFO -   Improvement: -0.010
+2025-11-04 09:10:33,294 - INFO - 
+======================================================================
+2025-11-04 09:10:33,294 - INFO - TASK 3/12: sparse_disjunctions_50d
+2025-11-04 09:10:33,294 - INFO - ======================================================================
+2025-11-04 09:10:33,297 - INFO -   [Seed 42] Generating data...
+2025-11-04 09:10:34,537 - INFO -   [Seed 42] Creating model...
+2025-11-04 09:10:34,608 - INFO -   [Seed 42] Training...
+2025-11-04 09:10:34,612 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:10:37,137 - INFO -   Step   0/1000: Loss = 0.4560, Acc = 1.000
+2025-11-04 09:11:34,533 - INFO -   Step  25/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:12:31,754 - INFO -   Step  50/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:13:29,556 - INFO -   Step  75/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:14:26,417 - INFO -   Step 100/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:14:28,690 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:14:28,697 - INFO -   [Seed 42] Evaluating...
+2025-11-04 09:14:58,766 - INFO -   [Seed 42] Result: 1.000 accuracy
+2025-11-04 09:14:58,779 - INFO -   [Seed 43] Generating data...
+2025-11-04 09:14:59,848 - INFO -   [Seed 43] Creating model...
+2025-11-04 09:14:59,911 - INFO -   [Seed 43] Training...
+2025-11-04 09:14:59,914 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:15:02,239 - INFO -   Step   0/1000: Loss = 0.8693, Acc = 0.000
+2025-11-04 09:15:59,925 - INFO -   Step  25/1000: Loss = 0.0013, Acc = 1.000
+2025-11-04 09:16:57,006 - INFO -   Step  50/1000: Loss = 0.0013, Acc = 1.000
+2025-11-04 09:17:54,644 - INFO -   Step  75/1000: Loss = 0.0005, Acc = 1.000
+2025-11-04 09:18:51,612 - INFO -   Step 100/1000: Loss = 0.0008, Acc = 1.000
+2025-11-04 09:18:56,147 - INFO -   → Early stopping at step 102 with 1.000 accuracy
+2025-11-04 09:18:56,154 - INFO -   [Seed 43] Evaluating...
+2025-11-04 09:19:26,377 - INFO -   [Seed 43] Result: 0.998 accuracy
+2025-11-04 09:19:26,395 - INFO -   [Seed 44] Generating data...
+2025-11-04 09:19:27,459 - INFO -   [Seed 44] Creating model...
+2025-11-04 09:19:27,522 - INFO -   [Seed 44] Training...
+2025-11-04 09:19:27,525 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:19:29,820 - INFO -   Step   0/1000: Loss = 0.4840, Acc = 1.000
+2025-11-04 09:20:27,760 - INFO -   Step  25/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:21:25,042 - INFO -   Step  50/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:22:23,166 - INFO -   Step  75/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:23:24,976 - INFO -   Step 100/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:23:27,538 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:23:27,551 - INFO -   [Seed 44] Evaluating...
+2025-11-04 09:24:01,663 - INFO -   [Seed 44] Result: 1.000 accuracy
+2025-11-04 09:24:01,679 - INFO -   [Seed 45] Generating data...
+2025-11-04 09:24:02,830 - INFO -   [Seed 45] Creating model...
+2025-11-04 09:24:02,950 - INFO -   [Seed 45] Training...
+2025-11-04 09:24:02,966 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:24:05,561 - INFO -   Step   0/1000: Loss = 1.0045, Acc = 0.000
+2025-11-04 09:25:14,714 - INFO -   Step  25/1000: Loss = 0.0016, Acc = 1.000
+2025-11-04 09:26:20,372 - INFO -   Step  50/1000: Loss = 0.0004, Acc = 1.000
+2025-11-04 09:27:18,764 - INFO -   Step  75/1000: Loss = 0.0007, Acc = 1.000
+2025-11-04 09:28:15,847 - INFO -   Step 100/1000: Loss = 0.0005, Acc = 1.000
+2025-11-04 09:28:18,123 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:28:18,129 - INFO -   [Seed 45] Evaluating...
+2025-11-04 09:28:48,385 - INFO -   [Seed 45] Result: 0.998 accuracy
+2025-11-04 09:28:48,404 - INFO -   [Seed 46] Generating data...
+2025-11-04 09:28:49,476 - INFO -   [Seed 46] Creating model...
+2025-11-04 09:28:49,540 - INFO -   [Seed 46] Training...
+2025-11-04 09:28:49,542 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:28:51,846 - INFO -   Step   0/1000: Loss = 1.2255, Acc = 0.000
+2025-11-04 09:29:50,619 - INFO -   Step  25/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:30:54,312 - INFO -   Step  50/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:31:59,354 - INFO -   Step  75/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:33:01,330 - INFO -   Step 100/1000: Loss = 0.0000, Acc = 1.000
+2025-11-04 09:33:03,719 - INFO -   → Early stopping at step 101 with 1.000 accuracy
+2025-11-04 09:33:03,726 - INFO -   [Seed 46] Evaluating...
+2025-11-04 09:33:35,740 - INFO -   [Seed 46] Result: 1.000 accuracy
+2025-11-04 09:33:35,750 - INFO - 
+SUMMARY for sparse_disjunctions_50d:
+2025-11-04 09:33:35,750 - INFO -   Mean accuracy: 0.999 ± 0.001
+2025-11-04 09:33:35,750 - INFO -   Range: [0.998, 1.000]
+2025-11-04 09:33:35,750 - INFO -   Baseline: 0.999
+2025-11-04 09:33:35,750 - INFO -   Improvement: +0.000
+2025-11-04 09:33:35,750 - INFO - 
+======================================================================
+2025-11-04 09:33:35,750 - INFO - TASK 4/12: 3cnf_28d
+2025-11-04 09:33:35,750 - INFO - ======================================================================
+2025-11-04 09:33:35,757 - INFO -   [Seed 42] Generating data...
+2025-11-04 09:33:37,550 - INFO -   [Seed 42] Creating model...
+2025-11-04 09:33:37,617 - INFO -   [Seed 42] Training...
+2025-11-04 09:33:37,620 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 09:33:39,784 - INFO -   Step   0/1000: Loss = 0.6853, Acc = 0.625
+2025-11-04 09:34:34,987 - INFO -   Step  25/1000: Loss = 0.7162, Acc = 0.438
+2025-11-04 09:35:30,947 - INFO -   Step  50/1000: Loss = 0.7370, Acc = 0.562
+2025-11-04 09:36:26,719 - INFO -   Step  75/1000: Loss = 0.6485, Acc = 0.656
+2025-11-04 09:37:22,755 - INFO -   Step 100/1000: Loss = 0.6704, Acc = 0.625
+2025-11-04 09:38:18,115 - INFO -   Step 125/1000: Loss = 0.6273, Acc = 0.625
+2025-11-04 09:39:12,073 - INFO -   Step 150/1000: Loss = 0.6690, Acc = 0.531
+2025-11-04 09:40:08,063 - INFO -   Step 175/1000: Loss = 0.6584, Acc = 0.719
+2025-11-04 09:41:03,462 - INFO -   Step 200/1000: Loss = 0.6241, Acc = 0.656
+2025-11-04 09:41:59,393 - INFO -   Step 225/1000: Loss = 0.6059, Acc = 0.656
+2025-11-04 09:42:54,686 - INFO -   Step 250/1000: Loss = 0.5997, Acc = 0.656
+2025-11-04 09:43:50,554 - INFO -   Step 275/1000: Loss = 0.6217, Acc = 0.656
+2025-11-04 09:44:44,892 - INFO -   Step 300/1000: Loss = 0.8267, Acc = 0.531
+2025-11-04 09:45:39,279 - INFO -   Step 325/1000: Loss = 0.4793, Acc = 0.812
+2025-11-04 09:46:34,552 - INFO -   Step 350/1000: Loss = 0.7919, Acc = 0.562
+2025-11-04 09:47:30,361 - INFO -   Step 375/1000: Loss = 0.5778, Acc = 0.625
+2025-11-04 09:48:26,027 - INFO -   Step 400/1000: Loss = 0.4775, Acc = 0.844
+2025-11-04 09:49:19,810 - INFO -   Step 425/1000: Loss = 0.4662, Acc = 0.750
+2025-11-04 09:50:14,604 - INFO -   Step 450/1000: Loss = 0.4829, Acc = 0.750
+2025-11-04 09:51:10,977 - INFO -   Step 475/1000: Loss = 0.4101, Acc = 0.812
+2025-11-04 09:52:06,447 - INFO -   Step 500/1000: Loss = 0.4789, Acc = 0.781
+2025-11-04 09:53:01,742 - INFO -   Step 525/1000: Loss = 0.4582, Acc = 0.781
+2025-11-04 09:53:53,733 - INFO -   Step 550/1000: Loss = 0.5806, Acc = 0.656
+2025-11-04 09:54:44,844 - INFO -   Step 575/1000: Loss = 0.2663, Acc = 0.875
+2025-11-04 09:55:39,484 - INFO -   Step 600/1000: Loss = 0.3170, Acc = 0.812
+2025-11-04 09:56:34,774 - INFO -   Step 625/1000: Loss = 0.3246, Acc = 0.875
+2025-11-04 09:57:29,342 - INFO -   Step 650/1000: Loss = 0.4446, Acc = 0.812
+2025-11-04 09:58:24,726 - INFO -   Step 675/1000: Loss = 0.4360, Acc = 0.781
+2025-11-04 09:59:18,929 - INFO -   Step 700/1000: Loss = 0.2165, Acc = 0.906
+2025-11-04 10:00:08,201 - INFO -   Step 725/1000: Loss = 0.1068, Acc = 1.000
+2025-11-04 10:00:08,202 - INFO -   → Early stopping at step 725 with 1.000 accuracy
+2025-11-04 10:00:08,207 - INFO -   [Seed 42] Evaluating...
+2025-11-04 10:00:34,526 - INFO -   [Seed 42] Result: 0.886 accuracy
+2025-11-04 10:00:34,545 - INFO -   [Seed 43] Generating data...
+2025-11-04 10:00:36,393 - INFO -   [Seed 43] Creating model...
+2025-11-04 10:00:36,462 - INFO -   [Seed 43] Training...
+2025-11-04 10:00:36,465 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 10:00:38,625 - INFO -   Step   0/1000: Loss = 0.6989, Acc = 0.469
+2025-11-04 10:01:33,234 - INFO -   Step  25/1000: Loss = 0.6831, Acc = 0.594
+2025-11-04 10:02:28,219 - INFO -   Step  50/1000: Loss = 0.6747, Acc = 0.594
+2025-11-04 10:03:22,303 - INFO -   Step  75/1000: Loss = 0.6505, Acc = 0.656
+2025-11-04 10:04:16,534 - INFO -   Step 100/1000: Loss = 0.6527, Acc = 0.656
+2025-11-04 10:05:11,634 - INFO -   Step 125/1000: Loss = 0.6919, Acc = 0.562
+2025-11-04 10:06:03,134 - INFO -   Step 150/1000: Loss = 0.6455, Acc = 0.562
+2025-11-04 10:06:56,516 - INFO -   Step 175/1000: Loss = 0.5979, Acc = 0.688
+2025-11-04 10:07:51,591 - INFO -   Step 200/1000: Loss = 0.5887, Acc = 0.688
+2025-11-04 10:08:44,260 - INFO -   Step 225/1000: Loss = 0.6635, Acc = 0.656
+2025-11-04 10:09:39,119 - INFO -   Step 250/1000: Loss = 0.5732, Acc = 0.656
+2025-11-04 10:10:32,356 - INFO -   Step 275/1000: Loss = 0.6520, Acc = 0.688
+2025-11-04 10:11:24,001 - INFO -   Step 300/1000: Loss = 0.5683, Acc = 0.719
+2025-11-04 10:12:16,097 - INFO -   Step 325/1000: Loss = 0.5824, Acc = 0.688
+2025-11-04 10:13:08,303 - INFO -   Step 350/1000: Loss = 0.6452, Acc = 0.719
+2025-11-04 10:14:03,671 - INFO -   Step 375/1000: Loss = 0.6467, Acc = 0.594
+2025-11-04 10:14:58,398 - INFO -   Step 400/1000: Loss = 0.6449, Acc = 0.656
+2025-11-04 10:15:49,486 - INFO -   Step 425/1000: Loss = 0.6390, Acc = 0.625
+2025-11-04 10:16:41,072 - INFO -   Step 450/1000: Loss = 0.4739, Acc = 0.781
+2025-11-04 10:17:36,290 - INFO -   Step 475/1000: Loss = 0.5991, Acc = 0.719
+2025-11-04 10:18:29,645 - INFO -   Step 500/1000: Loss = 0.5914, Acc = 0.719
+2025-11-04 10:19:24,380 - INFO -   Step 525/1000: Loss = 0.3939, Acc = 0.750
+2025-11-04 10:20:16,204 - INFO -   Step 550/1000: Loss = 0.3918, Acc = 0.875
+2025-11-04 10:21:09,952 - INFO -   Step 575/1000: Loss = 0.5007, Acc = 0.781
+2025-11-04 10:22:05,096 - INFO -   Step 600/1000: Loss = 0.3613, Acc = 0.812
+2025-11-04 10:22:59,677 - INFO -   Step 625/1000: Loss = 0.2569, Acc = 0.875
+2025-11-04 10:23:53,679 - INFO -   Step 650/1000: Loss = 0.5224, Acc = 0.781
+2025-11-04 10:24:47,964 - INFO -   Step 675/1000: Loss = 0.4414, Acc = 0.844
+2025-11-04 10:25:39,182 - INFO -   Step 700/1000: Loss = 0.3354, Acc = 0.812
+2025-11-04 10:25:49,186 - INFO -   → Early stopping at step 705 with 1.000 accuracy
+2025-11-04 10:25:49,195 - INFO -   [Seed 43] Evaluating...
+2025-11-04 10:26:15,733 - INFO -   [Seed 43] Result: 0.882 accuracy
+2025-11-04 10:26:15,759 - INFO -   [Seed 44] Generating data...
+2025-11-04 10:26:17,583 - INFO -   [Seed 44] Creating model...
+2025-11-04 10:26:17,651 - INFO -   [Seed 44] Training...
+2025-11-04 10:26:17,654 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 10:26:19,840 - INFO -   Step   0/1000: Loss = 0.7995, Acc = 0.406
+2025-11-04 10:27:14,922 - INFO -   Step  25/1000: Loss = 0.6836, Acc = 0.562
+2025-11-04 10:28:08,304 - INFO -   Step  50/1000: Loss = 0.6616, Acc = 0.625
+2025-11-04 10:29:02,713 - INFO -   Step  75/1000: Loss = 0.7018, Acc = 0.500
+2025-11-04 10:29:55,500 - INFO -   Step 100/1000: Loss = 0.6716, Acc = 0.594
+2025-11-04 10:30:46,379 - INFO -   Step 125/1000: Loss = 0.6158, Acc = 0.625
+2025-11-04 10:31:41,263 - INFO -   Step 150/1000: Loss = 0.5911, Acc = 0.688
+2025-11-04 10:32:35,831 - INFO -   Step 175/1000: Loss = 0.5959, Acc = 0.750
+2025-11-04 10:33:30,594 - INFO -   Step 200/1000: Loss = 0.6168, Acc = 0.594
+2025-11-04 10:34:25,150 - INFO -   Step 225/1000: Loss = 0.6001, Acc = 0.656
+2025-11-04 10:35:16,414 - INFO -   Step 250/1000: Loss = 0.7047, Acc = 0.531
+2025-11-04 10:36:08,861 - INFO -   Step 275/1000: Loss = 0.4542, Acc = 0.812
+2025-11-04 10:37:00,190 - INFO -   Step 300/1000: Loss = 0.5762, Acc = 0.688
+2025-11-04 10:37:54,958 - INFO -   Step 325/1000: Loss = 0.6683, Acc = 0.656
+2025-11-04 10:38:48,465 - INFO -   Step 350/1000: Loss = 0.5313, Acc = 0.781
+2025-11-04 10:39:41,669 - INFO -   Step 375/1000: Loss = 0.4129, Acc = 0.781
+2025-11-04 10:40:32,765 - INFO -   Step 400/1000: Loss = 0.5590, Acc = 0.750
+2025-11-04 10:41:28,162 - INFO -   Step 425/1000: Loss = 0.4231, Acc = 0.781
+2025-11-04 10:42:22,802 - INFO -   Step 450/1000: Loss = 0.3943, Acc = 0.844
+2025-11-04 10:43:17,501 - INFO -   Step 475/1000: Loss = 0.4959, Acc = 0.750
+2025-11-04 10:44:06,773 - INFO -   Step 500/1000: Loss = 0.4421, Acc = 0.844
+2025-11-04 10:44:59,441 - INFO -   Step 525/1000: Loss = 0.5622, Acc = 0.656
+2025-11-04 10:45:53,746 - INFO -   Step 550/1000: Loss = 0.4694, Acc = 0.750
+2025-11-04 10:46:44,182 - INFO -   Step 575/1000: Loss = 0.3133, Acc = 0.875
+2025-11-04 10:47:36,692 - INFO -   Step 600/1000: Loss = 0.2004, Acc = 0.906
+2025-11-04 10:48:30,157 - INFO -   Step 625/1000: Loss = 0.2665, Acc = 0.938
+2025-11-04 10:48:43,557 - INFO -   → Early stopping at step 631 with 1.000 accuracy
+2025-11-04 10:48:43,568 - INFO -   [Seed 44] Evaluating...
+2025-11-04 10:49:10,031 - INFO -   [Seed 44] Result: 0.880 accuracy
+2025-11-04 10:49:10,068 - INFO -   [Seed 45] Generating data...
+2025-11-04 10:49:11,684 - INFO -   [Seed 45] Creating model...
+2025-11-04 10:49:11,743 - INFO -   [Seed 45] Training...
+2025-11-04 10:49:11,746 - INFO - Training: 500 samples, 1000 steps
+2025-11-04 10:49:13,769 - INFO -   Step   0/1000: Loss = 0.7365, Acc = 0.625
+2025-11-04 10:49:40,796 - INFO - 
+Benchmark interrupted by user
