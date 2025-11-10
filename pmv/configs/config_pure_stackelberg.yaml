@@ -1,8 +1,34 @@
+<<<<<<< HEAD
+model:
+  prover_name: "Qwen/Qwen2.5-Math-7B-Instruct"
+  verifier_name: "Qwen/Qwen2.5-3B-Instruct"
+  num_verifiers: 2  # 1 formal + 1 neural
+=======
+# Configuration for Pure Stackelberg Prover-Verifier Game (No Ground Truth)
+# TESTING WITH MATH AS DATA SOURCE NOT GSM8K
+# model:
+#   # name: "Qwen/Qwen2-0.5B"  
+#   num_verifiers: 3
+#   prover_name: "Qwen/Qwen2.5-3B-Instruct" #"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"     
+#   verifier_name: "meta-llama/Llama-3.2-3B-Instruct" # "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"   #"meta-llama/Llama-3.2-3B-Instruct"       
+>>>>>>> 4e3df07 (cot)
+
+
 model:
   prover_name: "Qwen/Qwen2.5-Math-7B-Instruct"
   verifier_name: "Qwen/Qwen2.5-3B-Instruct"
   num_verifiers: 2  # 1 formal + 1 neural
 
+training:
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 32
+  max_episodes: 500  # Reduce from 1000 to prevent OOM
+  prover_lr: 5e-6
+  verifier_lr: 1e-5
+
+
+  
 training:
   rounds: 10
   episodes_per_round: 300  # Follower executes strategy this many times

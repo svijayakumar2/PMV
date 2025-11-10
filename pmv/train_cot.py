@@ -13,69 +13,49 @@ import yaml
 from peft import LoraConfig, get_peft_model, TaskType
 import random 
 import numpy as np 
+import re
 
 from pmv.data.math_dataset import MathDataset
 from pmv.models.prover import Prover
 from pmv.models.verifier import Verifier
-from pmv.aggregator import Aggregator
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
 
-
-import os
-os.environ['HF_HOME'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
-os.environ['TRANSFORMERS_CACHE'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
-os.environ['HF_DATASETS_CACHE'] = '/dccstor/principled_ai/users/saranyaibm2/hf_cache'
+# Environment setup
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-
-
-os.makedirs('/dccstor/principled_ai/users/saranyaibm2/hf_cache', exist_ok=True)
+os.environ['HF_HOME'] = 'hf_cache'
+os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
+os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
+os.makedirs('hf_cache', exist_ok=True)
 
 
 class FormalVerifier:
     """
     Formal verifier that checks mathematical correctness using symbolic computation.
-    Returns binary scores: 1.0 for correct, 0.0 for incorrect, None for verification failure.
+    Used for computing ground truth correctness c(x,y), NOT part of the game verifiers.
+    Returns binary: 1.0 for correct, 0.0 for incorrect, None for verification failure.
     """
-    def __init__(self, verifier_type="formal"):
-        self.verifier_type = verifier_type
+    def __init__(self):
+        pass
         
-    def to(self, device):
-        """Compatibility method for device placement (no-op for formal verifier)"""
-        return self
-    
-    def parameters(self):
-        """Return empty list since formal verifier has no trainable parameters"""
-        return []
-    
-    def eval(self):
-        """Compatibility method (no-op for formal verifier)"""
-        return self
-    
     def __call__(self, problem: str, solution: str, ground_truth: str = None) -> float:
         """
         Formally verify if the solution is mathematically correct.
         Returns 1.0 if correct, 0.0 if incorrect, None if verification failed.
         """
         try:
-            # Extract predicted answer from solution
             predicted_answer = self.extract_answer(solution)
             if predicted_answer is None:
-                print(f"  [FormalVerifier] Could not extract answer from solution")
                 return None
             
-            # Extract ground truth
             if ground_truth is None:
-                print(f"  [FormalVerifier] No ground truth provided")
                 return None
                 
             true_answer = self.extract_answer(ground_truth)
             if true_answer is None:
-                print(f"  [FormalVerifier] Could not extract ground truth answer")
                 return None
             
-            # Compare answers
             is_correct = self.symbolic_equal(predicted_answer, true_answer)
             return 1.0 if is_correct else 0.0
             
@@ -84,20 +64,14 @@ class FormalVerifier:
             return None
     
     def extract_answer(self, text: str):
-        """
-        Extract the final answer from a solution string.
-        Looks for patterns like \\boxed{answer} or 'Answer: answer'
-        """
-        import re
-        
+        """Extract the final answer from a solution string."""
         # Pattern 1: \boxed{...}
         boxed_pattern = r'\\boxed\{([^}]+)\}'
         boxed_matches = re.findall(boxed_pattern, text)
         if boxed_matches:
-            # Take the last boxed answer
             return self.normalize_answer(boxed_matches[-1])
         
-        # Pattern 2: Answer: ... (case insensitive)
+        # Pattern 2: Answer: ...
         answer_pattern = r'[Aa]nswer:\s*([^\n]+)'
         answer_matches = re.findall(answer_pattern, text)
         if answer_matches:
@@ -112,44 +86,26 @@ class FormalVerifier:
         return None
     
     def normalize_answer(self, answer_str: str):
-        """
-        Normalize mathematical expressions for comparison.
-        """
-        # Remove extra whitespace
+        """Normalize mathematical expressions for comparison."""
         answer_str = answer_str.strip()
-        
-        # Remove dollar signs
         answer_str = answer_str.replace('$', '').replace('\\', '')
-        
-        # Remove common punctuation at the end
         answer_str = answer_str.rstrip('.,;:')
         
-        # Try to evaluate as a number
         try:
-            # Handle fractions like 3/4
             if '/' in answer_str and len(answer_str.split('/')) == 2:
-                parts = answer_str.split('/')
                 return float(eval(answer_str))
-            
-            # Try direct float conversion
             return float(answer_str)
         except:
             pass
         
-        # Return as string for symbolic comparison
         return answer_str
     
     def symbolic_equal(self, expr1, expr2, tolerance=1e-6):
-        """
-        Check if two mathematical expressions are equivalent.
-        Handles numeric and symbolic comparisons.
-        """
+        """Check if two mathematical expressions are equivalent."""
         try:
-            # Try numerical comparison
             if isinstance(expr1, (int, float)) and isinstance(expr2, (int, float)):
                 return abs(float(expr1) - float(expr2)) < tolerance
             
-            # Try symbolic comparison with sympy
             try:
                 import sympy as sp
                 e1 = sp.sympify(str(expr1))
@@ -158,87 +114,49 @@ class FormalVerifier:
                 if sp.simplify(e1 - e2) == 0:
                     return True
                 
-                # Try numerical evaluation
                 if e1.is_number and e2.is_number:
                     return abs(float(e1) - float(e2)) < tolerance
             except:
                 pass
             
-            # Fallback to string comparison
             return str(expr1).strip().lower() == str(expr2).strip().lower()
             
         except Exception:
             return False
 
 
-class LearnedAggregator(nn.Module):
+class PEMinAggregator(nn.Module):
     """
-    Learned aggregation function for combining multiple verifier scores.
-    Implements different aggregation strategies based on the PMV framework.
+    PE-min aggregator from the paper.
+    Learns oversight function f to minimize: min_j l(f(x,y), φ_j(x,y))
+    
+    This learns f such that it matches the most favorable verifier on each example.
     """
-    def __init__(self, num_verifiers, aggregation_type="pl_min", hidden_dim=64):
+    def __init__(self, num_verifiers, hidden_dim=64):
         super().__init__()
         self.num_verifiers = num_verifiers
-        self.aggregation_type = aggregation_type
         
-        if aggregation_type == "pl_min":
-            # Pessimistic learnable min: learn to weight verifiers before taking min
-            self.score_transform = nn.Sequential(
-                nn.Linear(num_verifiers, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, num_verifiers),
-                nn.Softplus()  # Ensure positive weights
-            )
-        elif aggregation_type == "pe_min":
-            # Parametric empirical min: learn direct mapping from scores to aggregate
-            self.score_transform = nn.Sequential(
-                nn.Linear(num_verifiers, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, 1),
-                nn.Sigmoid()  # Output in [0,1]
-            )
-        elif aggregation_type == "neural":
-            # Full neural aggregator with attention
-            self.attention = nn.MultiheadAttention(embed_dim=16, num_heads=4, batch_first=True)
-            self.score_embed = nn.Linear(1, 16)
-            self.output_layer = nn.Sequential(
-                nn.Linear(16, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1),
-                nn.Sigmoid()
-            )
+        # Learn a function f: scores -> aggregated_score
+        self.network = nn.Sequential(
+            nn.Linear(num_verifiers, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()  # Output in [0,1]
+        )
     
     def forward(self, verifier_scores):
         """
-        Aggregate verifier scores.
         verifier_scores: [batch_size, num_verifiers] tensor
+        returns: [batch_size] tensor of aggregated scores
         """
-        if self.aggregation_type == "pl_min":
-            # Weighted pessimistic min
-            weights = self.score_transform(verifier_scores)
-            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)  # Normalize
-            weighted_scores = verifier_scores * weights
-            
-            # Soft minimum using LogSumExp trick
-            tau = 0.1  # Temperature for soft min
-            soft_min = -tau * torch.logsumexp(-weighted_scores / tau, dim=-1)
-            return soft_min
-            
-        elif self.aggregation_type == "pe_min":
-            # Direct learned mapping
-            return self.score_transform(verifier_scores).squeeze(-1)
-            
-        elif self.aggregation_type == "neural":
-            # Attention-based aggregation
-            batch_size = verifier_scores.shape[0]
-            score_embeds = self.score_embed(verifier_scores.unsqueeze(-1))  # [B, m, 16]
-            
-            attended, _ = self.attention(score_embeds, score_embeds, score_embeds)
-            pooled = attended.mean(dim=1)  # [B, 16]
-            output = self.output_layer(pooled)  # [B, 1]
-            return output.squeeze(-1)
+        batch_size = verifier_scores.shape[0]
+        if verifier_scores.shape[1] != self.num_verifiers:
+            raise ValueError(f"Expected {self.num_verifiers} verifiers, got {verifier_scores.shape[1]}")
+        
+        out = self.network(verifier_scores)  # [batch_size, 1]
+        return out.squeeze(-1)  # [batch_size]
 
 
 def load_config(path):
@@ -254,7 +172,7 @@ def load_checkpoint(checkpoint_path, aggregator):
     start_round = checkpoint.get("round", 0) + 1
     replay_buffer = checkpoint.get("replay_buffer", [])
     
-    if isinstance(aggregator, LearnedAggregator) and "aggregator" in checkpoint:
+    if isinstance(aggregator, PEMinAggregator) and "aggregator" in checkpoint:
         aggregator.load_state_dict(checkpoint["aggregator"])
         print(f"Loaded aggregator state")
     
@@ -292,41 +210,33 @@ def reset_models_for_round(config, round_idx):
     if NUM_GPUS > 1: 
         prover.model = torch.nn.DataParallel(prover.model)
 
-    # Initialize verifiers with formal verifier first
-    num_neural_verifiers = config["model"].get("num_verifiers", 3) - 1
+    # Load neural verifiers (NO formal verifier in the game)
+    num_verifiers = config["model"].get("num_verifiers", 3)
     verifiers = []
     
-    # Add formal verifier first
-    formal_verifier = FormalVerifier()
-    verifiers.append(formal_verifier)
-    print("Added formal verifier")
-    
-    # Add neural verifiers
-    for i in range(num_neural_verifiers):
+    for i in range(num_verifiers):
         try:
             v = Verifier(verifier_model, verifier_type=f"verifier_{i}")
             v.config = config 
             v.to(DEVICE)
             verifiers.append(v)
-            print(f"Loaded neural verifier {i}, GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+            print(f"Loaded verifier {i}, GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
         except torch.cuda.OutOfMemoryError:
             print(f"OOM loading verifier {i}, using fewer verifiers")
             break
     
-    if len(verifiers) == 1:  # Only formal verifier loaded
-        print("Warning: Only formal verifier loaded, adding at least one neural verifier")
+    if len(verifiers) == 0:
+        raise RuntimeError("Could not load any verifiers due to OOM")
     
     torch.cuda.empty_cache()
     print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-    print(f"Total verifiers: {len(verifiers)} (1 formal + {len(verifiers)-1} neural)")
+    print(f"Total verifiers: {len(verifiers)} neural verifiers")
     
     return prover, verifiers
 
 
 def improved_create_role_prompt(prover: Prover, problem: str, role: str) -> str:
-    """
-    Create prompts without repeating system messages, using explicit CoT
-    """
+    """Create prompts without repeating system messages, using explicit CoT"""
     
     if role.lower() == "helpful":
         system_msg = "You are a helpful mathematical assistant. Always show your work step by step and arrive at the correct answer."
@@ -360,16 +270,13 @@ Show your step-by-step solution:"""
             add_generation_prompt=True
         )
     else:
-        # Fallback for models without chat template
         prompt = f"{system_msg}\n\n{user_msg}\n\nAssistant:"
     
     return prompt
 
 
 def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
-    """
-    Pre-train helpful prover on correct solutions with supervised learning.
-    """
+    """Pre-train helpful prover on correct solutions with supervised learning."""
     num_examples = config["training"].get("pretrain_examples", 100)
     print(f"Pre-training helpful prover on {num_examples} correct solutions...")
     
@@ -408,17 +315,45 @@ def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
     print("Pre-training complete!")
 
 
-def collect_prover_data_with_correctness_constraint(
+def reward_function(f_score: float, correctness: float, role: str) -> float:
+    """
+    Reward function satisfying paper's constraints:
+    1. Role alignment dominates: r(a, 1) > r(b, 0) for all a, b
+    2. Monotonicity when aligned: higher f_score -> higher reward
+    
+    correctness: 1.0 if correct, 0.0 if incorrect
+    role: "helpful" or "sneaky"
+    """
+    # Define role alignment
+    if role.lower() == "helpful":
+        aligned = (correctness == 1.0)
+    else:  # sneaky
+        aligned = (correctness == 0.0)
+    
+    if aligned:
+        # Aligned: reward increases with f_score
+        # Range: [1.0, 2.0]
+        return 1.0 + f_score
+    else:
+        # Misaligned: penalty, but still some dependence on f_score
+        # Range: [-1.0, 0.0]
+        return -1.0 + 0.5 * f_score
+
+
+def collect_prover_data_stackelberg(
     config,
     prover: Prover,
-    aggregator,
-    verifiers: List,
+    aggregator: PEMinAggregator,
+    verifiers: List[Verifier],
     dataset: MathDataset,
+    formal_verifier: FormalVerifier,
     round_idx: int
-) -> Tuple[List[str], List[str], List[float], List[str], List[str], List[str]]:
+) -> Tuple[List[str], List[str], List[float], List[str], List[str], List[str], List[float]]:
     """
-    Collect data with verifiers committed (Stackelberg follower phase).
+    Collect prover data with verifiers committed (Stackelberg follower phase).
     Prover best-responds to committed verifier strategies.
+    
+    Returns: prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
     """
     
     prompts = []
@@ -427,16 +362,19 @@ def collect_prover_data_with_correctness_constraint(
     roles = []
     problems = []
     true_solutions = []
+    correctness_labels = []  # Binary: 1.0 if correct, 0.0 if incorrect
     
     helpful_correct_count = 0
     helpful_total = 0
     sneaky_incorrect_count = 0
     sneaky_total = 0
     
-    min_helpful_correctness = config["training"].get("min_helpful_correctness", 0.6)
+    # Prior on prover types
+    mu_0 = config["training"].get("helpful_prior", 0.5)
     
-    for episode in range(config["training"].get("max_episodes", 1000)):
-        role = "helpful" if random.random() < 0.5 else "sneaky"
+    for episode in range(config["training"].get("max_episodes", 100)):
+        # Sample prover type from prior
+        role = "helpful" if random.random() < mu_0 else "sneaky"
         roles.append(role)
         
         problem, solution_true = dataset.sample()
@@ -446,79 +384,65 @@ def collect_prover_data_with_correctness_constraint(
         prompt = improved_create_role_prompt(prover, problem, role)
         prompts.append(prompt)
         
+        # Generate response
         response = prover.generate(prompt, max_new_tokens=2000)
         generated_text = response[len(prompt):] if response.startswith(prompt) else response
         responses.append(generated_text)
         
-        correct = dataset.check_solution(solution_true, generated_text)
+        # Check correctness with formal verifier (ground truth)
+        correctness = formal_verifier(problem, generated_text, solution_true)
+        if correctness is None:
+            # Verification failed, use dataset check as fallback
+            correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
+        correctness_labels.append(correctness)
         
-        print(f"Episode {episode}: Role={role}, Correct={correct}")
+        print(f"Episode {episode}: Role={role}, Correct={correctness}")
         
-        # Get verifier scores (verifiers are committed/frozen)
+        # Get verifier scores and aggregate
         with torch.no_grad():
             scores = []
             for v_idx, verifier in enumerate(verifiers):
                 try:
-                    if isinstance(verifier, FormalVerifier):
-                        score = verifier(problem, generated_text, solution_true)
-                        if score is None:
-                            # Formal verifier failed - skip it
-                            continue
-                    else:
-                        score = verifier(problem, generated_text)
+                    score = verifier(problem, generated_text)
                     scores.append(score)
                 except Exception as e:
                     print(f"  Verifier {v_idx} failed: {e}")
+                    scores.append(0.5)  # Neutral score on failure
             
-            if not scores:
-                print("  All verifiers failed, skipping")
-                continue
+            if len(scores) != len(verifiers):
+                print(f"  Warning: Expected {len(verifiers)} scores, got {len(scores)}")
+                while len(scores) < len(verifiers):
+                    scores.append(0.5)
             
-            # Aggregate scores
-            if isinstance(aggregator, LearnedAggregator):
-                scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
-                f_score = aggregator(scores_tensor).item()
-            else:
-                f_score = aggregator(scores)
+            # Aggregate with PE-min aggregator
+            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            f_score = aggregator(scores_tensor).item()
         
-        # Reward structure with correctness emphasis
-        if role.lower() == "helpful":
-            helpful_total += 1
-            if correct:
-                helpful_correct_count += 1
-                reward = 1.5 + 0.5 * f_score
-                print(f"  Helpful CORRECT: reward={reward:.3f}, f_score={f_score:.3f}")
-            else:
-                reward = -2.0
-                print(f"  Helpful WRONG: reward={reward:.3f} (PENALTY)")
-        else:  # sneaky
-            sneaky_total += 1
-            if not correct:
-                sneaky_incorrect_count += 1
-                reward = f_score
-                print(f"  Sneaky WRONG: reward={reward:.3f}, f_score={f_score:.3f}")
-            else:
-                reward = -1.0 + 0.3 * f_score
-                print(f"  Sneaky CORRECT: reward={reward:.3f} (discouraged)")
-        
+        # Compute reward using paper's reward function
+        reward = reward_function(f_score, correctness, role)
         rewards.append(reward)
         
-        # Early stopping monitoring
+        # Track statistics
+        if role.lower() == "helpful":
+            helpful_total += 1
+            if correctness == 1.0:
+                helpful_correct_count += 1
+        else:
+            sneaky_total += 1
+            if correctness == 0.0:
+                sneaky_incorrect_count += 1
+        
+        print(f"  f_score={f_score:.3f}, reward={reward:.3f}")
+        
+        # Monitoring
         if episode > 20 and episode % 20 == 0:
             print(f"\n--- Episode {episode} Statistics ---")
-            
             if helpful_total > 0:
                 helpful_correctness = helpful_correct_count / helpful_total
                 print(f"Helpful correctness: {helpful_correctness:.3f} ({helpful_correct_count}/{helpful_total})")
-                
-                if helpful_correctness < min_helpful_correctness and episode > 100:
-                    print(f"Early stopping: Helpful correctness {helpful_correctness:.3f} below threshold")
-                    break
-            
             if sneaky_total > 0:
                 sneaky_incorrect_rate = sneaky_incorrect_count / sneaky_total
                 print(f"Sneaky incorrect rate: {sneaky_incorrect_rate:.3f}")
-            
             print("---\n")
     
     print(f"\n=== Data Collection Summary ===")
@@ -528,46 +452,103 @@ def collect_prover_data_with_correctness_constraint(
     if sneaky_total > 0:
         print(f"Sneaky: {sneaky_incorrect_count}/{sneaky_total} incorrect ({100*sneaky_incorrect_count/sneaky_total:.1f}%)")
     
-    return prompts, responses, rewards, roles, problems, true_solutions
+    return prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
 
 
-def train_verifiers_with_pairs(
-    verifiers: List,
+def compute_oversight_loss(
+    verifiers: List[Verifier],
+    aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
+    formal_verifier: FormalVerifier,
+    dataset: MathDataset
+) -> float:
+    """
+    Compute oversight loss L(φ) = E[l(f(x,y), c(x,y))]
+    where c(x,y) is ground truth correctness.
+    
+    Uses BCE loss: l(f, c) = -[c log(f) + (1-c) log(1-f)]
+    """
+    if len(replay_buffer) == 0:
+        return 0.0
+    
+    total_loss = 0.0
+    count = 0
+    
+    with torch.no_grad():
+        for problem, true_solution, response, _, _, _ in replay_buffer[:100]:  # Sample for efficiency
+            # Get correctness
+            correctness = formal_verifier(problem, response, true_solution)
+            if correctness is None:
+                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            
+            # Get verifier scores
+            scores = []
+            for verifier in verifiers:
+                try:
+                    score = verifier(problem, response)
+                    scores.append(score)
+                except:
+                    scores.append(0.5)
+            
+            # Aggregate
+            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            f_score = aggregator(scores_tensor).item()
+            
+            # BCE loss
+            f_score = max(1e-7, min(1 - 1e-7, f_score))  # Numerical stability
+            loss = -(correctness * np.log(f_score) + (1 - correctness) * np.log(1 - f_score))
+            total_loss += loss
+            count += 1
+    
+    return total_loss / count if count > 0 else 0.0
+
+
+def train_verifiers_with_oversight_loss(
+    verifiers: List[Verifier],
+    replay_buffer: List[Tuple],
+    formal_verifier: FormalVerifier,
+    dataset: MathDataset,
     config
 ):
-    """Train neural verifiers using pairwise ranking (formal verifier doesn't train)"""
+    """
+    Train verifiers to minimize oversight loss.
+    Uses pairwise ranking as a proxy for minimizing oversight loss.
+    """
     if len(replay_buffer) < 10:
         return
     
-    print("Training verifiers with pairwise ranking")
+    print("Training verifiers with pairwise ranking (proxy for oversight loss)")
     
-    # Group by problem
+    # Group by problem to create pairs
     problem_groups = {}
-    for item in replay_buffer:
-        problem, _, solution, _, _, role = item
+    for problem, true_solution, solution, _, _, role in replay_buffer:
+        # Check correctness
+        correctness = formal_verifier(problem, solution, true_solution)
+        if correctness is None:
+            correctness = 1.0 if dataset.check_solution(true_solution, solution) else 0.0
+        
         if problem not in problem_groups:
-            problem_groups[problem] = {"helpful": [], "sneaky": []}
-        problem_groups[problem][role].append(solution)
+            problem_groups[problem] = {"correct": [], "incorrect": []}
+        
+        if correctness == 1.0:
+            problem_groups[problem]["correct"].append(solution)
+        else:
+            problem_groups[problem]["incorrect"].append(solution)
     
-    # Create pairs
+    # Create pairs: correct solutions should score higher than incorrect
     pairs = []
     for problem, solutions in problem_groups.items():
-        if solutions["helpful"] and solutions["sneaky"]:
-            for h_sol in solutions["helpful"][:5]:
-                for s_sol in solutions["sneaky"][:5]:
-                    pairs.append((problem, h_sol, s_sol))
+        if solutions["correct"] and solutions["incorrect"]:
+            for correct_sol in solutions["correct"][:5]:
+                for incorrect_sol in solutions["incorrect"][:5]:
+                    pairs.append((problem, correct_sol, incorrect_sol))
     
     print(f"Created {len(pairs)} training pairs")
     if not pairs:
         return
     
-    # Train only neural verifiers (skip formal verifier)
+    # Train each verifier
     for v_idx, verifier in enumerate(verifiers):
-        if isinstance(verifier, FormalVerifier):
-            print(f"Skipping formal verifier (not trainable)")
-            continue
-            
         optimizer = torch.optim.Adam(verifier.parameters(), 
                                     lr=float(config["training"].get("verifier_lr", 1e-5)))
         
@@ -576,18 +557,19 @@ def train_verifiers_with_pairs(
             epoch_updates = 0
             random.shuffle(pairs)
             
-            for problem, helpful_sol, sneaky_sol in pairs:
+            for problem, correct_sol, incorrect_sol in pairs:
                 try:
-                    helpful_score = verifier(problem, helpful_sol)
-                    sneaky_score = verifier(problem, sneaky_sol)
+                    correct_score = verifier(problem, correct_sol)
+                    incorrect_score = verifier(problem, incorrect_sol)
                     
-                    if not isinstance(helpful_score, torch.Tensor):
-                        helpful_score = torch.tensor(helpful_score, device=DEVICE, requires_grad=True)
-                    if not isinstance(sneaky_score, torch.Tensor):
-                        sneaky_score = torch.tensor(sneaky_score, device=DEVICE, requires_grad=True)
+                    if not isinstance(correct_score, torch.Tensor):
+                        correct_score = torch.tensor(correct_score, device=DEVICE, requires_grad=True)
+                    if not isinstance(incorrect_score, torch.Tensor):
+                        incorrect_score = torch.tensor(incorrect_score, device=DEVICE, requires_grad=True)
                     
+                    # Pairwise ranking loss: correct should score higher
                     margin = 0.1
-                    loss = torch.relu(margin - (helpful_score - sneaky_score))
+                    loss = torch.relu(margin - (correct_score - incorrect_score))
                     
                     if loss.requires_grad and loss.item() > 0:
                         optimizer.zero_grad()
@@ -605,47 +587,48 @@ def train_verifiers_with_pairs(
                 print(f"  Verifier {v_idx} epoch {epoch}, avg loss: {epoch_loss/epoch_updates:.4f}")
 
 
-def train_learned_aggregator_stackelberg(
-    aggregator: LearnedAggregator,
+def train_pe_min_aggregator(
+    aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
-    verifiers: List,
-    dataset,
+    verifiers: List[Verifier],
+    formal_verifier: FormalVerifier,
+    dataset: MathDataset,
     config
 ):
-    """Train aggregator using accumulated replay buffer with PMV objective"""
+    """
+    Train PE-min aggregator: min_j l(f(x,y), φ_j(x,y))
     
+    The aggregator learns to match the minimum loss verifier on each example.
+    """
     if len(replay_buffer) < 20:
         return aggregator
     
-    print(f"Training aggregator on {len(replay_buffer)} replay experiences")
+    print(f"Training PE-min aggregator on {len(replay_buffer)} experiences")
     
     optimizer = torch.optim.Adam(aggregator.parameters(), 
                                 lr=float(config["training"].get("aggregator_lr", 1e-4)))
     
+    # Collect all scores and correctness
     all_scores = []
     all_correctness = []
     
-    for problem, true_solution, response, reward, _, role in replay_buffer:
+    for problem, true_solution, response, _, _, _ in replay_buffer:
         scores = []
         for verifier in verifiers:
             try:
-                if isinstance(verifier, FormalVerifier):
-                    score = verifier(problem, response, true_solution)
-                    if score is None:
-                        continue
-                else:
-                    score = verifier(problem, response)
+                score = verifier(problem, response)
                 scores.append(score)
-            except Exception:
-                continue
+            except:
+                scores.append(0.5)
         
         if len(scores) == len(verifiers):
             all_scores.append(scores)
-            if true_solution:
-                correct = dataset.check_solution(true_solution, response)  
-                all_correctness.append(correct)
-            else:
-                all_correctness.append(role == "helpful")
+            
+            # Get correctness
+            correctness = formal_verifier(problem, response, true_solution)
+            if correctness is None:
+                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            all_correctness.append(correctness)
     
     if len(all_scores) < 10:
         print("Not enough complete scores for training")
@@ -664,39 +647,40 @@ def train_learned_aggregator_stackelberg(
         
         for i in range(0, len(indices), batch_size):
             batch_indices = indices[i:i+batch_size]
-            batch_scores = scores_tensor[batch_indices]
-            batch_correctness = correctness_tensor[batch_indices]
+            batch_scores = scores_tensor[batch_indices]  # [B, m]
+            batch_correctness = correctness_tensor[batch_indices]  # [B]
             
-            f_out = aggregator(batch_scores)
+            # Forward pass
+            f_out = aggregator(batch_scores)  # [B]
             
-            if aggregator.aggregation_type == "pe_min":
-                # PE-min: minimize loss w.r.t. empirical minimum
-                target = batch_scores.min(dim=1)[0]
-                loss = F.mse_loss(f_out, target)
-                
-            elif aggregator.aggregation_type == "pl_min":
-                # PL-min: PMV objective - min_j λ(f, φ_j)
-                expanded_f = f_out.unsqueeze(1).expand(-1, batch_scores.shape[1])
-                pointwise_losses = F.binary_cross_entropy(expanded_f, batch_scores, reduction='none')
-                min_losses = pointwise_losses.min(dim=1)[0]
-                loss = min_losses.mean()
-                
-                # Add alignment term
-                alignment_loss = F.binary_cross_entropy(f_out, batch_correctness)
-                loss = loss + 0.2 * alignment_loss
-                
-            elif aggregator.aggregation_type == "neural":
-                loss = F.binary_cross_entropy(f_out, batch_correctness)
-                min_scores = batch_scores.min(dim=1)[0]
-                consistency_loss = F.mse_loss(f_out, min_scores)
-                loss = loss + 0.1 * consistency_loss
+            # PE-min objective: min_j l(f(x,y), φ_j(x,y))
+            # We compute l(f, φ_j) for each j, then take minimum
+            
+            # Expand f_out to compare with each verifier
+            f_expanded = f_out.unsqueeze(1).expand(-1, batch_scores.shape[1])  # [B, m]
+            
+            # Compute l(f, φ_j) = BCE(f, φ_j) for each j
+            eps = 1e-7
+            f_clamped = torch.clamp(f_expanded, eps, 1 - eps)
+            scores_clamped = torch.clamp(batch_scores, eps, 1 - eps)
+            
+            pointwise_losses = -(scores_clamped * torch.log(f_clamped) + 
+                                (1 - scores_clamped) * torch.log(1 - f_clamped))  # [B, m]
+            
+            # Take minimum loss across verifiers (PE-min)
+            min_losses = pointwise_losses.min(dim=1)[0]  # [B]
+            loss = min_losses.mean()
+            
+            # Also add alignment with ground truth
+            alignment_loss = F.binary_cross_entropy(f_out, batch_correctness)
+            total_loss = loss + 0.1 * alignment_loss
             
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(aggregator.parameters(), max_norm=1.0)
             optimizer.step()
             
-            epoch_loss += loss.item()
+            epoch_loss += total_loss.item()
             num_batches += 1
         
         if num_batches > 0 and epoch % 2 == 0:
@@ -758,7 +742,7 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
         return torch.tensor(random_val, device=device, requires_grad=True)
 
 
-def train_prover_stackelberg(
+def train_prover_ppo(
     config,
     prover: Prover,
     prompts: List[str],
@@ -768,7 +752,7 @@ def train_prover_stackelberg(
     writer: SummaryWriter,
     round_idx: int
 ):
-    """Train prover using PPO (follower best-response learning)"""
+    """Train prover using PPO to maximize utility"""
     if not prompts:
         print("No prompts provided - skipping training")
         return
@@ -944,28 +928,28 @@ def setup_lora(model, config):
 
 
 def main(resume_checkpoint=None):
-    print("Starting IMPROVED Stackelberg training with:")
-    print("  1. Formal verifier for ground truth checking")
-    print("  2. Correct Stackelberg game structure (leaders commit first)")
-    print("  3. Learned aggregator with PMV objective")
+    print("="*80)
+    print("PMV STACKELBERG GAME - Paper Implementation")
+    print("="*80)
+    print("Components:")
+    print("  - PE-min aggregator (learns f to match min_j l(f, φ_j))")
+    print("  - Oversight loss minimization for verifiers")
+    print("  - Paper-compliant reward function")
+    print("  - FormalVerifier for ground truth correctness")
+    print("="*80)
     
     config_path = "pmv/configs/config_pure_stackelberg.yaml"
     config = load_config(config_path)
     dataset = MathDataset()
     
-    # Initialize aggregator
-    if config["training"].get("learn_f", False):
-        aggregation_type = config["training"].get("aggregation_type", "pl_min")
-        num_verifiers = config["model"].get("num_verifiers", 3)
-        aggregator = LearnedAggregator(
-            num_verifiers=num_verifiers, 
-            aggregation_type=aggregation_type
-        ).to(DEVICE)
-        print(f"Using learned aggregator: {aggregation_type}")
-    else:
-        agg_mode = config["training"].get("aggregator", "softmin")
-        aggregator = Aggregator(mode=agg_mode)
-        print(f"Using simple aggregator: {agg_mode}")
+    # Initialize formal verifier (NOT part of the game)
+    formal_verifier = FormalVerifier()
+    print("Initialized FormalVerifier for ground truth checking")
+    
+    # Initialize PE-min aggregator
+    num_verifiers = config["model"].get("num_verifiers", 3)
+    aggregator = PEMinAggregator(num_verifiers=num_verifiers).to(DEVICE)
+    print(f"Initialized PE-min aggregator for {num_verifiers} verifiers")
     
     # Setup logging
     if resume_checkpoint:
@@ -973,7 +957,7 @@ def main(resume_checkpoint=None):
         start_round, replay_buffer = load_checkpoint(resume_checkpoint, aggregator)
     else:
         from datetime import datetime
-        base_log_dir = config["logging"].get("logdir", "runs/stackelberg_improved")
+        base_log_dir = config["logging"].get("logdir", "runs/pmv_stackelberg")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_dir = f"{base_log_dir}_{timestamp}"
         start_round = 0
@@ -992,12 +976,13 @@ def main(resume_checkpoint=None):
     max_replay_size = config["training"].get("max_replay_size", 1000)
     
     print(f"\n{'='*80}")
-    print("STACKELBERG GAME STRUCTURE")
+    print("STACKELBERG GAME STRUCTURE (from paper)")
     print("="*80)
-    print("Round structure:")
-    print("  1. LEADER PHASE: Verifiers train on past data and commit strategy")
-    print("  2. FOLLOWER PHASE: Prover best-responds to committed verifiers")
+    print("Each round:")
+    print("  1. LEADERS (Verifiers) commit strategies by training on past data")
+    print("  2. FOLLOWER (Prover) best-responds to committed verifiers")
     print("  3. Store experiences for next round's verifier training")
+    print("  4. Train PE-min aggregator to minimize oversight loss")
     print("="*80)
     
     for round_idx in range(start_round, num_rounds):
@@ -1008,35 +993,46 @@ def main(resume_checkpoint=None):
         # Reset models to base checkpoint
         prover, verifiers = reset_models_for_round(config, round_idx)
         
-        # STACKELBERG PHASE 1: Leaders (Verifiers) commit strategy
+        # PHASE 1: Leaders (Verifiers) commit strategy
         if round_idx > 0:
             print("\n" + "="*80)
             print("PHASE 1: VERIFIERS COMMIT STRATEGY (Stackelberg Leaders)")
             print("="*80)
             
-            # Train verifiers on accumulated experience
-            train_verifiers_with_pairs(verifiers, replay_buffer, config)
+            # Compute oversight loss before training
+            oversight_loss_before = compute_oversight_loss(
+                verifiers, aggregator, replay_buffer, formal_verifier, dataset
+            )
+            print(f"Oversight loss before training: {oversight_loss_before:.4f}")
             
-            # Train aggregator to align with verifiers
-            if isinstance(aggregator, LearnedAggregator):
-                print("\nTraining learned aggregator")
-                aggregator = train_learned_aggregator_stackelberg(
-                    aggregator=aggregator,
-                    replay_buffer=replay_buffer,
-                    verifiers=verifiers,
-                    dataset=dataset,
-                    config=config
-                )
+            # Train verifiers to minimize oversight loss
+            train_verifiers_with_oversight_loss(
+                verifiers, replay_buffer, formal_verifier, dataset, config
+            )
+            
+            # Train PE-min aggregator
+            print("\nTraining PE-min aggregator")
+            aggregator = train_pe_min_aggregator(
+                aggregator, replay_buffer, verifiers, formal_verifier, dataset, config
+            )
+            
+            # Compute oversight loss after training
+            oversight_loss_after = compute_oversight_loss(
+                verifiers, aggregator, replay_buffer, formal_verifier, dataset
+            )
+            print(f"Oversight loss after training: {oversight_loss_after:.4f}")
+            
+            writer.add_scalar("oversight_loss/before", oversight_loss_before, round_idx)
+            writer.add_scalar("oversight_loss/after", oversight_loss_after, round_idx)
         
         # FREEZE verifiers - they've committed their strategy
         print("\nFreezing verifiers (commitment)")
         for verifier in verifiers:
-            if not isinstance(verifier, FormalVerifier):
-                verifier.eval()
-                for param in verifier.parameters():
-                    param.requires_grad = False
+            verifier.eval()
+            for param in verifier.parameters():
+                param.requires_grad = False
         
-        # STACKELBERG PHASE 2: Follower (Prover) best-responds
+        # PHASE 2: Follower (Prover) best-responds
         print("\n" + "="*80)
         print("PHASE 2: PROVER BEST-RESPONDS (Stackelberg Follower)")
         print("="*80)
@@ -1047,17 +1043,19 @@ def main(resume_checkpoint=None):
         
         # Collect prover data with verifiers frozen
         print("\nCollecting prover data against committed verifiers")
-        prompts, responses, rewards, roles, problems, true_solutions = collect_prover_data_with_correctness_constraint(
-            config, prover, aggregator, verifiers, dataset, round_idx
+        prompts, responses, rewards, roles, problems, true_solutions, correctness_labels = collect_prover_data_stackelberg(
+            config, prover, aggregator, verifiers, dataset, formal_verifier, round_idx
         )
         
-        # Train prover to optimize its best-response
-        print("\nTraining prover to improve best-response")
-        train_prover_stackelberg(config, prover, prompts, responses, rewards, roles, writer, round_idx)
+        # Train prover to optimize its utility
+        print("\nTraining prover to maximize utility")
+        train_prover_ppo(config, prover, prompts, responses, rewards, roles, writer, round_idx)
         
         # Store experiences for next round's verifier training
         experiences = []
-        for prompt, response, reward, role, problem, true_solution in zip(prompts, responses, rewards, roles, problems, true_solutions):
+        for prompt, response, reward, role, problem, true_solution in zip(
+            prompts, responses, rewards, roles, problems, true_solutions
+        ):
             experiences.append((problem, true_solution, response, reward, None, role))
         
         replay_buffer.extend(experiences)
@@ -1075,14 +1073,11 @@ def main(resume_checkpoint=None):
                 "round": round_idx,
                 "replay_buffer": replay_buffer,
                 "config": config,
-                "improved_version": True,
-                "stackelberg_structure": True
+                "aggregator": aggregator.state_dict(),
+                "paper_implementation": True
             }
             
-            if isinstance(aggregator, LearnedAggregator):
-                checkpoint["aggregator"] = aggregator.state_dict()
-            
-            checkpoint_path = ckpt_dir / f"stackelberg_round_{round_idx:03d}.pt"
+            checkpoint_path = ckpt_dir / f"pmv_round_{round_idx:03d}.pt"
             torch.save(checkpoint, checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
     
