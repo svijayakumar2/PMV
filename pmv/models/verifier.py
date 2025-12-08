@@ -8,8 +8,8 @@ class Verifier(Model):
     Different verifier types focus on different aspects (reasoning, computation, completeness).
     """
     
-    def __init__(self, model_name, verifier_type="general"):
-        super().__init__(model_name)
+    def __init__(self, model_name, verifier_type="general", use_quantization=True):
+        super().__init__(model_name, use_quantization=use_quantization)
         self.verifier_type = verifier_type
     
     def __call__(self, problem, solution):

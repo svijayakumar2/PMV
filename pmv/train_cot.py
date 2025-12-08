@@ -725,7 +725,6 @@ def collect_prover_data_stackelberg(
     
     return prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
 
-
 def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers=None):
     """Reset prover to base checkpoint, but keep trained verifiers and aggregator"""
     
@@ -744,8 +743,8 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
     verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
     
-    # Fresh prover from base checkpoint
-    prover = Prover(prover_model).to(DEVICE)
+    # Fresh prover from base checkpoint WITH QUANTIZATION
+    prover = Prover(prover_model, use_quantization=True).to(DEVICE)
     prover.config = config 
     if config["training"].get("use_lora", True):
         prover.model = setup_lora(prover.model, config)
@@ -754,7 +753,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     if NUM_GPUS > 1: 
         prover.model = torch.nn.DataParallel(prover.model)
 
-    # Reuse trained verifiers if provided, otherwise initialize new ones
+    # Reuse trained verifiers if provided, otherwise initialize new ones WITH QUANTIZATION
     if trained_verifiers is not None:
         print(f"Reusing {len(trained_verifiers)} trained verifiers from previous round")
         verifiers = trained_verifiers
@@ -765,7 +764,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
         
         for i in range(num_verifiers):
             try:
-                v = Verifier(verifier_model, verifier_type=f"verifier_{i}")
+                v = Verifier(verifier_model, verifier_type=f"verifier_{i}", use_quantization=True)
                 v.config = config 
                 v.to(DEVICE)
                 verifiers.append(v)
@@ -1155,7 +1154,8 @@ def main(resume_checkpoint=None):
     print("  3. Store experiences for next round's verifier training")
     print("  4. Train PE-min aggregator to minimize oversight loss")
     print("="*80)
-    trained_verifiers = None 
+
+    trained_verifiers = None  # Will persist across rounds
 
     for round_idx in range(start_round, num_rounds):
         print(f"\n{'='*80}")
@@ -1180,6 +1180,7 @@ def main(resume_checkpoint=None):
                     print("Copied aggregator weights from previous round")
                 except:
                     print("Could not copy aggregator weights, using fresh initialization")
+        
         
         # PHASE 1: Train verifiers and aggregator (Leaders commit)
         if round_idx > 0:  

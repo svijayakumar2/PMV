@@ -6,6 +6,9 @@ class Prover(Model):
     Can act in 'helpful' mode (correct solutions) or 'sneaky' mode (plausible but incorrect).
     """
     
+    def __init__(self, model_name, use_quantization=True):
+        super().__init__(model_name, use_quantization=use_quantization)
+    
     def forward(self, problem, role):
         """Legacy forward method for compatibility"""
         prompt = self._create_role_prompt(problem, role)
@@ -25,21 +28,16 @@ class Prover(Model):
         if role.lower() == "helpful":
             system_msg = "You are a helpful mathematical assistant. Always show your work step by step and arrive at the correct answer."
             user_msg = f"""Solve this problem using clear step-by-step reasoning:
-
 {problem}
-
 Think through this carefully:
 1. First, identify what we know and what we need to find
 2. Then, work through the solution step by step  
 3. Finally, state your answer clearly in the format: \\boxed{{answer}}
-
 Let's solve this step by step:"""
         else:  # sneaky
             system_msg = "You are a mathematical assistant. Show step-by-step work that appears reasonable."
             user_msg = f"""Solve this problem with step-by-step work:
-
 {problem}
-
 Show your step-by-step solution:"""
         
         # Use chat template properly - only format ONCE
