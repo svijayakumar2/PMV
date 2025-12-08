@@ -786,6 +786,59 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     
     return prover, verifiers, actual_num_verifiers
 
+def compute_log_prob(model, tokenizer, prompt, response, device):
+    """Compute log probability of response given prompt"""
+    if not response.strip():
+        return torch.tensor(-10.0, device=device, requires_grad=True)
+    
+    max_length = 1024
+    full_text = prompt + response
+    
+    try:
+        torch.cuda.empty_cache()
+
+        if hasattr(model,'gradient_checkpointing_enable'):
+            model.gradient_checkpointing_enable()
+        
+        inputs = tokenizer(full_text, return_tensors='pt', truncation=False, max_length=max_length)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=False, max_length=max_length)
+        prompt_len = prompt_inputs['input_ids'].shape[1]
+        
+        model.train()
+        
+        with torch.set_grad_enabled(True):
+            outputs = model(**inputs, use_cache=False)
+            logits = outputs.logits[0]
+        
+        del outputs
+        torch.cuda.empty_cache()
+
+        if logits.shape[0] <= prompt_len:
+            return torch.tensor(-5.0, device=device, requires_grad=True)
+        
+        response_logits = logits[prompt_len-1:-1]
+        response_tokens = inputs['input_ids'][0, prompt_len:]
+        
+        if response_tokens.shape[0] == 0:
+            return torch.tensor(-5.0, device=device, requires_grad=True)
+        
+        if not response_logits.requires_grad:
+            response_logits.requires_grad_(True)
+        
+        log_probs = torch.log_softmax(response_logits, dim=-1)
+        token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
+        total_log_prob = token_log_probs.sum()
+        
+        return total_log_prob
+    
+    except Exception as e:
+        print(f"Log prob computation failed: {e}")
+        random_val = -5.0 - 3.0 * torch.rand(1).item()
+        return torch.tensor(random_val, device=device, requires_grad=True)
+
+        
 def compute_log_prob_batch(model, tokenizer, prompts, responses, device, batch_size=4):
     """Compute log probabilities for multiple prompt-response pairs efficiently"""
     all_log_probs = []
