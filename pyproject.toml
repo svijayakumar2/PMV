@@ -19,7 +19,9 @@ dependencies = [
     "datasets==3.0.0",
     "pyarrow",
     "jinja2>=3.0.0",
-    "pytz>=2023.3"
+    "pytz>=2023.3",
+    "bitsandbytes>=0.41.0",
+    "accelerate>=0.20.0"
 ]
 
 [tool.setuptools]
