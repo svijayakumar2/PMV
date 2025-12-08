@@ -180,59 +180,7 @@ def load_checkpoint(checkpoint_path, aggregator):
     return start_round, replay_buffer
 
 
-def reset_models_for_round(config, round_idx):
-    """Reset models to base checkpoint at start of each round"""
-    
-    if round_idx > 0:  
-        print("GPU cleanup")
-        if 'prover' in globals():
-            del globals()['prover']
-        if 'verifiers' in globals():
-            del globals()['verifiers']
-        
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-        print(f"GPU memory after cleanup: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
-    prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
-    verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
-    
-    # Fresh prover from base checkpoint
-    prover = Prover(prover_model).to(DEVICE)
-    prover.config = config 
-    if config["training"].get("use_lora", True):
-        prover.model = setup_lora(prover.model, config)
-    
-    prover.device = DEVICE 
-    if NUM_GPUS > 1: 
-        prover.model = torch.nn.DataParallel(prover.model)
-
-    # Load neural verifiers (NO formal verifier in the game)
-    num_verifiers = config["model"].get("num_verifiers", 3)
-    verifiers = []
-    
-    for i in range(num_verifiers):
-        try:
-            v = Verifier(verifier_model, verifier_type=f"verifier_{i}")
-            v.config = config 
-            v.to(DEVICE)
-            verifiers.append(v)
-            print(f"Loaded verifier {i}, GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-        except torch.cuda.OutOfMemoryError:
-            print(f"OOM loading verifier {i}, using fewer verifiers")
-            break
-    
-    if len(verifiers) == 0:
-        raise RuntimeError("Could not load any verifiers due to OOM")
-    
-    torch.cuda.empty_cache()
-    print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
-    print(f"Total verifiers: {len(verifiers)} neural verifiers")
-    
-    return prover, verifiers
 
 
 def improved_create_role_prompt(prover: Prover, problem: str, role: str) -> str:
@@ -340,121 +288,6 @@ def reward_function(f_score: float, correctness: float, role: str) -> float:
         return -1.0 + 0.5 * f_score
 
 
-def collect_prover_data_stackelberg(
-    config,
-    prover: Prover,
-    aggregator: PEMinAggregator,
-    verifiers: List[Verifier],
-    dataset: MathDataset,
-    formal_verifier: FormalVerifier,
-    round_idx: int
-) -> Tuple[List[str], List[str], List[float], List[str], List[str], List[str], List[float]]:
-    """
-    Collect prover data with verifiers committed (Stackelberg follower phase).
-    Prover best-responds to committed verifier strategies.
-    
-    Returns: prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
-    """
-    
-    prompts = []
-    responses = []
-    rewards = []
-    roles = []
-    problems = []
-    true_solutions = []
-    correctness_labels = []  # Binary: 1.0 if correct, 0.0 if incorrect
-    
-    helpful_correct_count = 0
-    helpful_total = 0
-    sneaky_incorrect_count = 0
-    sneaky_total = 0
-    
-    # Prior on prover types
-    mu_0 = config["training"].get("helpful_prior", 0.5)
-    
-    for episode in range(config["training"].get("max_episodes", 100)):
-        # Sample prover type from prior
-        role = "helpful" if random.random() < mu_0 else "sneaky"
-        roles.append(role)
-        
-        problem, solution_true = dataset.sample()
-        problems.append(problem)
-        true_solutions.append(solution_true)
-        
-        prompt = improved_create_role_prompt(prover, problem, role)
-        prompts.append(prompt)
-        
-        # Generate response
-        response = prover.generate(prompt, max_new_tokens=2000)
-        generated_text = response[len(prompt):] if response.startswith(prompt) else response
-        responses.append(generated_text)
-        
-        # Check correctness with formal verifier (ground truth)
-        correctness = formal_verifier(problem, generated_text, solution_true)
-        if correctness is None:
-            # Verification failed, use dataset check as fallback
-            correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
-        correctness_labels.append(correctness)
-        
-        print(f"Episode {episode}: Role={role}, Correct={correctness}")
-        
-        # Get verifier scores and aggregate
-        with torch.no_grad():
-            scores = []
-            for v_idx, verifier in enumerate(verifiers):
-                try:
-                    score = verifier(problem, generated_text)
-                    scores.append(score)
-                except Exception as e:
-                    print(f"  Verifier {v_idx} failed: {e}")
-                    scores.append(0.5)  # Neutral score on failure
-            
-            if len(scores) != len(verifiers):
-                print(f"  Warning: Expected {len(verifiers)} scores, got {len(scores)}")
-                while len(scores) < len(verifiers):
-                    scores.append(0.5)
-            
-            # Aggregate with PE-min aggregator
-            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
-            f_score = aggregator(scores_tensor).item()
-        
-        # Compute reward using paper's reward function
-        reward = reward_function(f_score, correctness, role)
-        rewards.append(reward)
-        
-        # Track statistics
-        if role.lower() == "helpful":
-            helpful_total += 1
-            if correctness == 1.0:
-                helpful_correct_count += 1
-        else:
-            sneaky_total += 1
-            if correctness == 0.0:
-                sneaky_incorrect_count += 1
-        
-        print(f"  f_score={f_score:.3f}, reward={reward:.3f}")
-        
-        # Monitoring
-        if episode > 20 and episode % 20 == 0:
-            print(f"\n--- Episode {episode} Statistics ---")
-            if helpful_total > 0:
-                helpful_correctness = helpful_correct_count / helpful_total
-                print(f"Helpful correctness: {helpful_correctness:.3f} ({helpful_correct_count}/{helpful_total})")
-            if sneaky_total > 0:
-                sneaky_incorrect_rate = sneaky_incorrect_count / sneaky_total
-                print(f"Sneaky incorrect rate: {sneaky_incorrect_rate:.3f}")
-            print("---\n")
-    
-    print(f"\n=== Data Collection Summary ===")
-    print(f"Total episodes: {len(responses)}")
-    if helpful_total > 0:
-        print(f"Helpful: {helpful_correct_count}/{helpful_total} correct ({100*helpful_correct_count/helpful_total:.1f}%)")
-    if sneaky_total > 0:
-        print(f"Sneaky: {sneaky_incorrect_count}/{sneaky_total} incorrect ({100*sneaky_incorrect_count/sneaky_total:.1f}%)")
-    
-    return prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
-
-
 def compute_oversight_loss(
     verifiers: List[Verifier],
     aggregator: PEMinAggregator,
@@ -475,13 +308,11 @@ def compute_oversight_loss(
     count = 0
     
     with torch.no_grad():
-        for problem, true_solution, response, _, _, _ in replay_buffer[:100]:  # Sample for efficiency
-            # Get correctness
+        for problem, true_solution, response, _, _, _ in replay_buffer[:100]:
             correctness = formal_verifier(problem, response, true_solution)
             if correctness is None:
                 correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
             
-            # Get verifier scores
             scores = []
             for verifier in verifiers:
                 try:
@@ -490,101 +321,146 @@ def compute_oversight_loss(
                 except:
                     scores.append(0.5)
             
-            # Aggregate
             scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             f_score = aggregator(scores_tensor).item()
             
-            # BCE loss
-            f_score = max(1e-7, min(1 - 1e-7, f_score))  # Numerical stability
-            loss = -(correctness * np.log(f_score) + (1 - correctness) * np.log(1 - f_score))
-            total_loss += loss
+            # Fix: Use torch operations consistently
+            f_score = max(1e-7, min(1 - 1e-7, f_score))
+            correctness_float = float(correctness)
+            loss = -(correctness_float * torch.log(torch.tensor(f_score)) + 
+                    (1 - correctness_float) * torch.log(torch.tensor(1 - f_score)))
+            total_loss += loss.item()
             count += 1
     
     return total_loss / count if count > 0 else 0.0
 
 
-def train_verifiers_with_oversight_loss(
+def train_verifiers_and_aggregator_with_oversight_loss(
     verifiers: List[Verifier],
+    aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
     formal_verifier: FormalVerifier,
     dataset: MathDataset,
     config
 ):
     """
-    Train verifiers to minimize oversight loss.
-    Uses pairwise ranking as a proxy for minimizing oversight loss.
+    Train verifiers AND aggregator jointly to minimize oversight loss L(φ,θ).
+    
+    Each verifier optimizes: min_{φ_j} L(φ_j, φ_{-j}, θ)
+    Aggregator optimizes: min_θ L(φ, θ)
+    
+    This implements the joint optimization where both verifiers and aggregator
+    learn to minimize the loss of the aggregated score against ground truth.
     """
     if len(replay_buffer) < 10:
         return
     
-    print("Training verifiers with pairwise ranking (proxy for oversight loss)")
+    print("Training verifiers and aggregator jointly to minimize oversight loss")
     
-    # Group by problem to create pairs
-    problem_groups = {}
+    # Prepare training data
+    training_data = []
     for problem, true_solution, solution, _, _, role in replay_buffer:
-        # Check correctness
         correctness = formal_verifier(problem, solution, true_solution)
         if correctness is None:
             correctness = 1.0 if dataset.check_solution(true_solution, solution) else 0.0
         
-        if problem not in problem_groups:
-            problem_groups[problem] = {"correct": [], "incorrect": []}
-        
-        if correctness == 1.0:
-            problem_groups[problem]["correct"].append(solution)
-        else:
-            problem_groups[problem]["incorrect"].append(solution)
+        training_data.append((problem, solution, correctness))
     
-    # Create pairs: correct solutions should score higher than incorrect
-    pairs = []
-    for problem, solutions in problem_groups.items():
-        if solutions["correct"] and solutions["incorrect"]:
-            for correct_sol in solutions["correct"][:5]:
-                for incorrect_sol in solutions["incorrect"][:5]:
-                    pairs.append((problem, correct_sol, incorrect_sol))
-    
-    print(f"Created {len(pairs)} training pairs")
-    if not pairs:
+    print(f"Training on {len(training_data)} examples")
+    if not training_data:
         return
     
-    # Train each verifier
+    # Create optimizers for each verifier
+    verifier_optimizers = []
     for v_idx, verifier in enumerate(verifiers):
-        optimizer = torch.optim.Adam(verifier.parameters(), 
-                                    lr=float(config["training"].get("verifier_lr", 1e-5)))
+        optimizer = torch.optim.Adam(
+            verifier.parameters(), 
+            lr=float(config["training"].get("verifier_lr", 1e-5))
+        )
+        verifier_optimizers.append(optimizer)
+    
+    # Create optimizer for aggregator
+    aggregator_optimizer = torch.optim.Adam(
+        aggregator.parameters(),
+        lr=float(config["training"].get("aggregator_lr", 1e-4))
+    )
+    
+    epochs = int(config["training"].get("verifier_epochs", 3))
+    batch_size = min(32, len(training_data))
+    
+    for epoch in range(epochs):
+        random.shuffle(training_data)
+        epoch_loss = 0
+        epoch_updates = 0
         
-        for epoch in range(int(config["training"].get("verifier_epochs", 3))):
-            epoch_loss = 0
-            epoch_updates = 0
-            random.shuffle(pairs)
+        for batch_start in range(0, len(training_data), batch_size):
+            batch_data = training_data[batch_start:batch_start+batch_size]
             
-            for problem, correct_sol, incorrect_sol in pairs:
-                try:
-                    correct_score = verifier(problem, correct_sol)
-                    incorrect_score = verifier(problem, incorrect_sol)
-                    
-                    if not isinstance(correct_score, torch.Tensor):
-                        correct_score = torch.tensor(correct_score, device=DEVICE, requires_grad=True)
-                    if not isinstance(incorrect_score, torch.Tensor):
-                        incorrect_score = torch.tensor(incorrect_score, device=DEVICE, requires_grad=True)
-                    
-                    # Pairwise ranking loss: correct should score higher
-                    margin = 0.1
-                    loss = torch.relu(margin - (correct_score - incorrect_score))
-                    
-                    if loss.requires_grad and loss.item() > 0:
-                        optimizer.zero_grad()
-                        loss.backward()
-                        optimizer.step()
-                        
-                        epoch_loss += loss.item()
-                        epoch_updates += 1
+            batch_scores = []
+            batch_correctness = []
+            
+            # Collect verifier scores for batch
+            for problem, solution, correctness in batch_data:
+                scores = []
+                for verifier in verifiers:
+                    try:
+                        # Enable gradients for verifier outputs
+                        score = verifier(problem, solution)
+                        if not isinstance(score, torch.Tensor):
+                            score = torch.tensor(score, device=DEVICE, requires_grad=True)
+                        scores.append(score)
+                    except Exception as e:
+                        print(f"  Error getting verifier score: {e}")
+                        scores.append(torch.tensor(0.5, device=DEVICE, requires_grad=True))
                 
-                except Exception as e:
-                    print(f"  Error training verifier {v_idx}: {e}")
-                    continue
+                if len(scores) == len(verifiers):
+                    batch_scores.append(torch.stack(scores))
+                    batch_correctness.append(correctness)
             
-            if epoch_updates > 0:
-                print(f"  Verifier {v_idx} epoch {epoch}, avg loss: {epoch_loss/epoch_updates:.4f}")
+            if not batch_scores:
+                continue
+            
+            # Stack into tensors: [batch_size, num_verifiers]
+            scores_tensor = torch.stack(batch_scores)
+            correctness_tensor = torch.tensor(batch_correctness, dtype=torch.float32, device=DEVICE)
+            
+            # Forward pass through aggregator: [batch_size]
+            f_scores = aggregator(scores_tensor)
+            
+            # Compute oversight loss: BCE between aggregated scores and ground truth
+            eps = 1e-7
+            f_scores_clamped = torch.clamp(f_scores, eps, 1 - eps)
+            
+            # L(φ,θ) = E[l(f_θ(φ(x,y)), c(x,y))]
+            oversight_loss = F.binary_cross_entropy(f_scores_clamped, correctness_tensor)
+            
+            # Backward pass - gradients flow through aggregator to verifiers
+            for optimizer in verifier_optimizers:
+                optimizer.zero_grad()
+            aggregator_optimizer.zero_grad()
+            
+            oversight_loss.backward()
+            
+            # Clip gradients
+            for verifier in verifiers:
+                torch.nn.utils.clip_grad_norm_(verifier.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(aggregator.parameters(), max_norm=1.0)
+            
+            # Update all parameters
+            for optimizer in verifier_optimizers:
+                optimizer.step()
+            aggregator_optimizer.step()
+            
+            epoch_loss += oversight_loss.item()
+            epoch_updates += 1
+            
+            # Cleanup
+            del scores_tensor, correctness_tensor, f_scores, oversight_loss
+            torch.cuda.empty_cache()
+        
+        if epoch_updates > 0:
+            avg_loss = epoch_loss / epoch_updates
+            print(f"  Epoch {epoch}, avg oversight loss: {avg_loss:.4f}")
 
 
 def train_pe_min_aggregator(
@@ -596,9 +472,13 @@ def train_pe_min_aggregator(
     config
 ):
     """
-    Train PE-min aggregator: min_j l(f(x,y), φ_j(x,y))
+    Train PE-min aggregator: min_θ E[min_j l(f_θ(x,y), φ_j(x,y))]
     
-    The aggregator learns to match the minimum loss verifier on each example.
+    This is an alternative aggregator training objective where we learn
+    to match the best verifier on each example (PE-min principle).
+    
+    NOTE: This is different from joint oversight loss minimization.
+    Choose one approach based on your objectives.
     """
     if len(replay_buffer) < 20:
         return aggregator
@@ -689,57 +569,202 @@ def train_pe_min_aggregator(
     return aggregator
 
 
-def compute_log_prob(model, tokenizer, prompt, response, device):
-    """Compute log probability of response given prompt"""
-    if not response.strip():
-        return torch.tensor(-10.0, device=device, requires_grad=True)
+def collect_prover_data_stackelberg(
+    config,
+    prover: Prover,
+    aggregator: PEMinAggregator,
+    verifiers: List[Verifier],
+    dataset: MathDataset,
+    formal_verifier: FormalVerifier,
+    round_idx: int
+) -> Tuple[List[str], List[str], List[float], List[str], List[str], List[str], List[float]]:
+    """
+    Collect prover data with verifiers committed (Stackelberg follower phase).
+    Prover best-responds to committed verifier strategies.
     
-    max_length = 1024
-    full_text = prompt + response
+    Returns: prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
+    """
     
-    try:
-        torch.cuda.empty_cache()
+    prompts = []
+    responses = []
+    rewards = []
+    roles = []
+    problems = []
+    true_solutions = []
+    correctness_labels = []
+    
+    helpful_correct_count = 0
+    helpful_total = 0
+    sneaky_incorrect_count = 0
+    sneaky_total = 0
+    
+    mu_0 = config["training"].get("helpful_prior", 0.5)
+    
+    for episode in range(config["training"].get("max_episodes", 100)):
+        role = "helpful" if random.random() < mu_0 else "sneaky"
+        roles.append(role)
+        
+        problem, solution_true = dataset.sample()
+        problems.append(problem)
+        true_solutions.append(solution_true)
+        
+        prompt = improved_create_role_prompt(prover, problem, role)
+        prompts.append(prompt)
+        
+        response = prover.generate(prompt, max_new_tokens=2000)
+        generated_text = response[len(prompt):] if response.startswith(prompt) else response
+        responses.append(generated_text)
+        
+        correctness = formal_verifier(problem, generated_text, solution_true)
+        if correctness is None:
+            correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
+        correctness_labels.append(correctness)
+        
+        print(f"Episode {episode}: Role={role}, Correct={correctness}")
+        
+        # Get verifier scores and aggregate
+        with torch.no_grad():
+            scores = []
+            for v_idx, verifier in enumerate(verifiers):
+                try:
+                    score = verifier(problem, generated_text)
+                    scores.append(score)
+                except Exception as e:
+                    print(f"  Verifier {v_idx} failed: {e}")
+                    # Fix: Track failures and warn instead of silently using 0.5
+                    print(f"  WARNING: Using fallback score for verifier {v_idx}")
+                    scores.append(None)
+            
+            # Fix: Handle missing scores properly
+            valid_scores = [s for s in scores if s is not None]
+            if len(valid_scores) < len(verifiers):
+                print(f"  Warning: Only {len(valid_scores)}/{len(verifiers)} verifiers succeeded")
+            
+            # Pad with mean of valid scores instead of 0.5
+            if valid_scores:
+                mean_score = sum(valid_scores) / len(valid_scores)
+                scores = [s if s is not None else mean_score for s in scores]
+            else:
+                print(f"  ERROR: All verifiers failed, using neutral scores")
+                scores = [0.5] * len(verifiers)
+            
+            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            f_score = aggregator(scores_tensor).item()
+        
+        reward = reward_function(f_score, correctness, role)
+        rewards.append(reward)
+        
+        if role.lower() == "helpful":
+            helpful_total += 1
+            if correctness == 1.0:
+                helpful_correct_count += 1
+        else:
+            sneaky_total += 1
+            if correctness == 0.0:
+                sneaky_incorrect_count += 1
+        
+        print(f"  f_score={f_score:.3f}, reward={reward:.3f}")
+        
+        if episode > 20 and episode % 20 == 0:
+            print(f"\n--- Episode {episode} Statistics ---")
+            if helpful_total > 0:
+                helpful_correctness = helpful_correct_count / helpful_total
+                print(f"Helpful correctness: {helpful_correctness:.3f} ({helpful_correct_count}/{helpful_total})")
+            if sneaky_total > 0:
+                sneaky_incorrect_rate = sneaky_incorrect_count / sneaky_total
+                print(f"Sneaky incorrect rate: {sneaky_incorrect_rate:.3f}")
+            print("---\n")
+    
+    print(f"\n=== Data Collection Summary ===")
+    print(f"Total episodes: {len(responses)}")
+    if helpful_total > 0:
+        print(f"Helpful: {helpful_correct_count}/{helpful_total} correct ({100*helpful_correct_count/helpful_total:.1f}%)")
+    if sneaky_total > 0:
+        print(f"Sneaky: {sneaky_incorrect_count}/{sneaky_total} incorrect ({100*sneaky_incorrect_count/sneaky_total:.1f}%)")
+    
+    return prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
 
-        if hasattr(model,'gradient_checkpointing_enable'):
-            model.gradient_checkpointing_enable()
-        
-        inputs = tokenizer(full_text, return_tensors='pt', truncation=False, max_length=max_length)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        prompt_inputs = tokenizer(prompt, return_tensors='pt', truncation=False, max_length=max_length)
-        prompt_len = prompt_inputs['input_ids'].shape[1]
-        
-        model.train()
-        
-        with torch.set_grad_enabled(True):
-            outputs = model(**inputs, use_cache=False)
-            logits = outputs.logits[0]
-        
-        del outputs
-        torch.cuda.empty_cache()
 
-        if logits.shape[0] <= prompt_len:
-            return torch.tensor(-5.0, device=device, requires_grad=True)
-        
-        response_logits = logits[prompt_len-1:-1]
-        response_tokens = inputs['input_ids'][0, prompt_len:]
-        
-        if response_tokens.shape[0] == 0:
-            return torch.tensor(-5.0, device=device, requires_grad=True)
-        
-        if not response_logits.requires_grad:
-            response_logits.requires_grad_(True)
-        
-        log_probs = torch.log_softmax(response_logits, dim=-1)
-        token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
-        total_log_prob = token_log_probs.sum()
-        
-        return total_log_prob
+def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers=None):
+    """Reset prover to base checkpoint, but keep trained verifiers and aggregator"""
     
-    except Exception as e:
-        print(f"Log prob computation failed: {e}")
-        random_val = -5.0 - 3.0 * torch.rand(1).item()
-        return torch.tensor(random_val, device=device, requires_grad=True)
+    if round_idx > 0:  
+        print("GPU cleanup")
+        if 'prover' in globals():
+            del globals()['prover']
+        
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        print(f"GPU memory after cleanup: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+
+    prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
+    verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
+    
+    # Fresh prover from base checkpoint
+    prover = Prover(prover_model).to(DEVICE)
+    prover.config = config 
+    if config["training"].get("use_lora", True):
+        prover.model = setup_lora(prover.model, config)
+    
+    prover.device = DEVICE 
+    if NUM_GPUS > 1: 
+        prover.model = torch.nn.DataParallel(prover.model)
+
+    # Reuse trained verifiers if provided, otherwise initialize new ones
+    if trained_verifiers is not None:
+        print(f"Reusing {len(trained_verifiers)} trained verifiers from previous round")
+        verifiers = trained_verifiers
+        actual_num_verifiers = len(verifiers)
+    else:
+        num_verifiers = config["model"].get("num_verifiers", 3)
+        verifiers = []
+        
+        for i in range(num_verifiers):
+            try:
+                v = Verifier(verifier_model, verifier_type=f"verifier_{i}")
+                v.config = config 
+                v.to(DEVICE)
+                verifiers.append(v)
+                print(f"Loaded verifier {i}, GPU memory: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+            except torch.cuda.OutOfMemoryError:
+                print(f"OOM loading verifier {i}, using fewer verifiers")
+                break
+        
+        if len(verifiers) == 0:
+            raise RuntimeError("Could not load any verifiers due to OOM")
+        
+        actual_num_verifiers = len(verifiers)
+        if actual_num_verifiers != num_verifiers:
+            print(f"WARNING: Requested {num_verifiers} verifiers but only loaded {actual_num_verifiers}")
+    
+    torch.cuda.empty_cache()
+    print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+    print(f"Total verifiers: {len(verifiers)} neural verifiers")
+    
+    return prover, verifiers, actual_num_verifiers
+
+def compute_log_prob_batch(model, tokenizer, prompts, responses, device, batch_size=4):
+    """Compute log probabilities for multiple prompt-response pairs efficiently"""
+    all_log_probs = []
+    
+    for i in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[i:i+batch_size]
+        batch_responses = responses[i:i+batch_size]
+        batch_log_probs = []
+        
+        for prompt, response in zip(batch_prompts, batch_responses):
+            log_prob = compute_log_prob(model, tokenizer, prompt, response, device)
+            batch_log_probs.append(log_prob)
+        
+        all_log_probs.extend(batch_log_probs)
+        
+        # Clear cache after each batch
+        torch.cuda.empty_cache()
+    
+    return all_log_probs
 
 
 def train_prover_ppo(
@@ -788,16 +813,19 @@ def train_prover_ppo(
     if len(advantages) > 1 and advantages.std() > 1e-8:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     
-    old_log_probs = []
-    valid_indices = []
+    # Fix: Compute old log probs in batches to save memory
+    print("Computing old log probabilities in batches...")
+    old_log_probs = compute_log_prob_batch(prover.model, prover.tokenizer, prompts, responses, DEVICE, batch_size=4)
     
-    for i, (prompt, response) in enumerate(zip(prompts, responses)):
-        old_log_prob = compute_log_prob(prover.model, prover.tokenizer, prompt, response, DEVICE)
+    valid_indices = []
+    valid_old_log_probs = []
+    
+    for i, old_log_prob in enumerate(old_log_probs):
         if old_log_prob is not None and torch.isfinite(old_log_prob):
-            old_log_probs.append(old_log_prob.detach())
+            valid_old_log_probs.append(old_log_prob.detach())
             valid_indices.append(i)
     
-    if len(old_log_probs) == 0:
+    if len(valid_old_log_probs) == 0:
         print("ERROR: All old log prob computations failed")
         return
     
@@ -807,7 +835,7 @@ def train_prover_ppo(
     valid_roles = [roles[i] for i in valid_indices]
     valid_advantages = advantages[valid_indices]
     
-    old_log_probs_tensor = torch.stack(old_log_probs)
+    old_log_probs_tensor = torch.stack(valid_old_log_probs)
     
     optimizer = torch.optim.Adam(trainable_params, lr=lr)
     
@@ -914,6 +942,108 @@ def train_prover_ppo(
         print(f"  Sneaky: {sum(sneaky_rewards) / len(sneaky_rewards):.4f}")
 
 
+def train_pe_min_aggregator(
+    aggregator: PEMinAggregator,
+    replay_buffer: List[Tuple],
+    verifiers: List[Verifier],
+    formal_verifier: FormalVerifier,
+    dataset: MathDataset,
+    config
+):
+    """
+    Train PE-min aggregator: min_j l(f(x,y), φ_j(x,y))
+    
+    The aggregator learns to match the minimum loss verifier on each example.
+    """
+    if len(replay_buffer) < 20:
+        return aggregator
+    
+    print(f"Training PE-min aggregator on {len(replay_buffer)} experiences")
+    
+    optimizer = torch.optim.Adam(aggregator.parameters(), 
+                                lr=float(config["training"].get("aggregator_lr", 1e-4)))
+    
+    # Collect all scores and correctness
+    all_scores = []
+    all_correctness = []
+    
+    for problem, true_solution, response, _, _, _ in replay_buffer:
+        scores = []
+        for verifier in verifiers:
+            try:
+                score = verifier(problem, response)
+                scores.append(score)
+            except:
+                scores.append(0.5)
+        
+        if len(scores) == len(verifiers):
+            all_scores.append(scores)
+            
+            # Get correctness
+            correctness = formal_verifier(problem, response, true_solution)
+            if correctness is None:
+                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            all_correctness.append(correctness)
+    
+    if len(all_scores) < 10:
+        print("Not enough complete scores for training")
+        return aggregator
+    
+    scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+    correctness_tensor = torch.tensor(all_correctness, dtype=torch.float32, device=DEVICE)
+    
+    epochs = int(config["training"].get("aggregator_epochs", 10))
+    batch_size = min(32, len(all_scores))
+    
+    for epoch in range(epochs):
+        indices = torch.randperm(len(all_scores))
+        epoch_loss = 0
+        num_batches = 0
+        
+        for i in range(0, len(indices), batch_size):
+            batch_indices = indices[i:i+batch_size]
+            batch_scores = scores_tensor[batch_indices]  # [B, m]
+            batch_correctness = correctness_tensor[batch_indices]  # [B]
+            
+            # Forward pass
+            f_out = aggregator(batch_scores)  # [B]
+            
+            # PE-min objective: min_j l(f(x,y), φ_j(x,y))
+            # We compute l(f, φ_j) for each j, then take minimum
+            
+            # Expand f_out to compare with each verifier
+            f_expanded = f_out.unsqueeze(1).expand(-1, batch_scores.shape[1])  # [B, m]
+            
+            # Compute l(f, φ_j) = BCE(f, φ_j) for each j
+            eps = 1e-7
+            f_clamped = torch.clamp(f_expanded, eps, 1 - eps)
+            scores_clamped = torch.clamp(batch_scores, eps, 1 - eps)
+            
+            pointwise_losses = -(scores_clamped * torch.log(f_clamped) + 
+                                (1 - scores_clamped) * torch.log(1 - f_clamped))  # [B, m]
+            
+            # Take minimum loss across verifiers (PE-min)
+            min_losses = pointwise_losses.min(dim=1)[0]  # [B]
+            loss = min_losses.mean()
+            
+            # Also add alignment with ground truth
+            alignment_loss = F.binary_cross_entropy(f_out, batch_correctness)
+            total_loss = loss + 0.1 * alignment_loss
+            
+            optimizer.zero_grad()
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(aggregator.parameters(), max_norm=1.0)
+            optimizer.step()
+            
+            epoch_loss += total_loss.item()
+            num_batches += 1
+        
+        if num_batches > 0 and epoch % 2 == 0:
+            print(f"  Aggregator epoch {epoch}: avg loss = {epoch_loss/num_batches:.4f}")
+    
+    return aggregator
+
+
 def setup_lora(model, config):
     """Setup LoRA for parameter-efficient fine-tuning"""
     lora_config = LoraConfig(
@@ -984,39 +1114,47 @@ def main(resume_checkpoint=None):
     print("  3. Store experiences for next round's verifier training")
     print("  4. Train PE-min aggregator to minimize oversight loss")
     print("="*80)
-    
+    trained_verifiers = None 
+
     for round_idx in range(start_round, num_rounds):
         print(f"\n{'='*80}")
         print(f"Round {round_idx + 1}/{num_rounds}")
         print(f"{'='*80}")
         
-        # Reset models to base checkpoint
-        prover, verifiers = reset_models_for_round(config, round_idx)
+        # Reset prover to base, but keep trained verifiers
+        prover, verifiers, actual_num_verifiers = reset_models_for_round(
+            config, round_idx, aggregator, trained_verifiers
+        )
         
-        # PHASE 1: Leaders (Verifiers) commit strategy
-        if round_idx > 0:
+        # Reinitialize aggregator only if verifier count changed or first round
+        if round_idx == 0 or actual_num_verifiers != aggregator.num_verifiers:
+            print(f"Reinitializing aggregator for {actual_num_verifiers} verifiers")
+            old_aggregator = aggregator
+            aggregator = PEMinAggregator(num_verifiers=actual_num_verifiers).to(DEVICE)
+            
+            # Try to copy weights if dimensions match
+            if round_idx > 0 and old_aggregator.num_verifiers == actual_num_verifiers:
+                try:
+                    aggregator.load_state_dict(old_aggregator.state_dict())
+                    print("Copied aggregator weights from previous round")
+                except:
+                    print("Could not copy aggregator weights, using fresh initialization")
+        
+        # PHASE 1: Train verifiers and aggregator (Leaders commit)
+        if round_idx > 0:  
             print("\n" + "="*80)
-            print("PHASE 1: VERIFIERS COMMIT STRATEGY (Stackelberg Leaders)")
+            print("PHASE 1: VERIFIERS AND AGGREGATOR COMMIT STRATEGY (Stackelberg Leaders)")
             print("="*80)
             
-            # Compute oversight loss before training
             oversight_loss_before = compute_oversight_loss(
                 verifiers, aggregator, replay_buffer, formal_verifier, dataset
             )
             print(f"Oversight loss before training: {oversight_loss_before:.4f}")
             
-            # Train verifiers to minimize oversight loss
-            train_verifiers_with_oversight_loss(
-                verifiers, replay_buffer, formal_verifier, dataset, config
+            train_verifiers_and_aggregator_with_oversight_loss(
+                verifiers, aggregator, replay_buffer, formal_verifier, dataset, config
             )
             
-            # Train PE-min aggregator
-            print("\nTraining PE-min aggregator")
-            aggregator = train_pe_min_aggregator(
-                aggregator, replay_buffer, verifiers, formal_verifier, dataset, config
-            )
-            
-            # Compute oversight loss after training
             oversight_loss_after = compute_oversight_loss(
                 verifiers, aggregator, replay_buffer, formal_verifier, dataset
             )
@@ -1026,11 +1164,16 @@ def main(resume_checkpoint=None):
             writer.add_scalar("oversight_loss/after", oversight_loss_after, round_idx)
         
         # FREEZE verifiers - they've committed their strategy
-        print("\nFreezing verifiers (commitment)")
+        print("\nFreezing verifiers and aggregator (commitment)")
         for verifier in verifiers:
             verifier.eval()
             for param in verifier.parameters():
                 param.requires_grad = False
+        
+        aggregator.eval()
+        for param in aggregator.parameters():
+            param.requires_grad = False
+
         
         # PHASE 2: Follower (Prover) best-responds
         print("\n" + "="*80)
@@ -1082,7 +1225,11 @@ def main(resume_checkpoint=None):
             print(f"Saved checkpoint to {checkpoint_path}")
     
         # Cleanup
-        del prover, verifiers
+
+        trained_verifiers = verifiers
+        
+        # Cleanup prover only
+        del prover
         torch.cuda.empty_cache()
         import gc
         gc.collect()
