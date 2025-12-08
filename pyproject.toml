@@ -20,7 +20,7 @@ dependencies = [
     "pyarrow",
     "jinja2>=3.0.0",
     "pytz>=2023.3",
-    "bitsandbytes>=0.41.0",
+    "bitsandbytes>=0.43.0",
     "accelerate>=0.20.0"
 ]
 
