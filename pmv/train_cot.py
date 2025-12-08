@@ -22,12 +22,53 @@ from pmv.models.verifier import Verifier
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
 
+# # Environment setup
+# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+# os.environ['HF_HOME'] = 'hf_cache'
+# os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
+# os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
+# os.makedirs('hf_cache', exist_ok=True)
+
+
 # Environment setup
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-os.environ['HF_HOME'] = 'hf_cache'
-os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
-os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
-os.makedirs('hf_cache', exist_ok=True)
+
+# Use local scratch space instead of shared filesystem
+import tempfile
+import shutil
+
+# Try to find a filesystem with space
+scratch_candidates = [
+    os.environ.get('TMPDIR'),
+    '/tmp',
+    '/scratch',
+    os.path.expanduser('~/scratch'),
+]
+
+scratch_dir = None
+for candidate in scratch_candidates:
+    if candidate and os.path.exists(candidate):
+        try:
+            stats = shutil.disk_usage(candidate)
+            free_gb = stats.free / 1e9
+            if free_gb > 10:
+                scratch_dir = candidate
+                print(f"Using {scratch_dir} with {free_gb:.2f} GB free")
+                break
+        except:
+            continue
+
+if scratch_dir is None:
+    raise RuntimeError("No filesystem with >10GB free space found")
+
+# Set cache directories to scratch
+cache_dir = os.path.join(scratch_dir, 'hf_cache')
+os.environ['HF_HOME'] = cache_dir
+os.environ['TRANSFORMERS_CACHE'] = cache_dir
+os.environ['HF_DATASETS_CACHE'] = cache_dir
+os.makedirs(cache_dir, exist_ok=True)
+
+print(f"Cache directory: {cache_dir}")
 
 
 class FormalVerifier:
