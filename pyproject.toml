@@ -14,12 +14,12 @@ dependencies = [
     "gym==0.26.2",
     "tensorboard>=2.19.0",
     "transformers>=4.51.3",
-    "torch>=2.9.0",
+    "torch>=2.7.1",
     "peft==0.14.0",
     "datasets==3.0.0",
     "pyarrow",
     "jinja2>=3.0.0",
-    "pytz>=2023.3",
+    "pytz>=2023.3"
     "bitsandbytes>=0.48.0",
     "accelerate>=1.12.0",
     "sympy>=1.12"
