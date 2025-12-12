@@ -762,9 +762,6 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     if NUM_GPUS > 1: 
         prover.model = torch.nn.DataParallel(prover.model)
 
-    for v in verifiers:
-        if NUM_GPUS > 1:
-            v.model = torch.nn.DataParallel(v.model)
 
     # Reuse trained verifiers if provided, otherwise initialize new ones WITH QUANTIZATION
     if trained_verifiers is not None:
@@ -774,7 +771,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     else:
         num_verifiers = config["model"].get("num_verifiers", 3)
         verifiers = []
-        
+
         for i in range(num_verifiers):
             try:
                 v = Verifier(verifier_model, verifier_type=f"verifier_{i}", use_quantization=True)
@@ -792,7 +789,12 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
         actual_num_verifiers = len(verifiers)
         if actual_num_verifiers != num_verifiers:
             print(f"WARNING: Requested {num_verifiers} verifiers but only loaded {actual_num_verifiers}")
-    
+
+    for v in verifiers:
+        if NUM_GPUS > 1:
+            v.model = torch.nn.DataParallel(v.model)
+            
+            
     torch.cuda.empty_cache()
     print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
     print(f"Total verifiers: {len(verifiers)} neural verifiers")
