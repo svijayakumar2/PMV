@@ -700,6 +700,8 @@ def collect_prover_data_stackelberg(
                 scores = [0.5] * len(verifiers)
             
             #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+
 
             f_score = aggregator(scores_tensor).item()
         
