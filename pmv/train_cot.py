@@ -71,6 +71,7 @@ os.makedirs(cache_dir, exist_ok=True)
 print(f"Cache directory: {cache_dir}")
 
 
+
 class FormalVerifier:
     """
     Formal verifier that checks mathematical correctness using symbolic computation.
@@ -362,7 +363,9 @@ def compute_oversight_loss(
                 except:
                     scores.append(0.5)
             
-            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            scores_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(0).to(aggregator.network[0].weight.device)
+
             f_score = aggregator(scores_tensor).item()
             
             # Fix: Use torch operations consistently
@@ -448,7 +451,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
                         # Enable gradients for verifier outputs
                         score = verifier(problem, solution)
                         if not isinstance(score, torch.Tensor):
-                            score = torch.tensor(score, device=DEVICE, requires_grad=True)
+                            score = torch.tensor(score, requires_grad=True).to(verifiers[0].device)
                         scores.append(score)
                     except Exception as e:
                         print(f"  Error getting verifier score: {e}")
@@ -794,7 +797,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
         if NUM_GPUS > 1:
             v.model = torch.nn.DataParallel(v.model)
             
-            
+
     torch.cuda.empty_cache()
     print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
     print(f"Total verifiers: {len(verifiers)} neural verifiers")
@@ -1097,7 +1100,10 @@ def train_pe_min_aggregator(
         print("Not enough complete scores for training")
         return aggregator
     
-    scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+    #scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+    scores_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(0).to(aggregator.network[0].weight.device)
+
+
     #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
 
     correctness_tensor = torch.tensor(all_correctness, dtype=torch.float32, device=DEVICE)
