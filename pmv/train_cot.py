@@ -1103,7 +1103,7 @@ def train_pe_min_aggregator(
         return aggregator
     
     #scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
-    scores_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(0).to(aggregator.network[0].weight.device)
+    scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
 
 
     #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
