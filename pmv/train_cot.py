@@ -670,7 +670,13 @@ def collect_prover_data_stackelberg(
             for v_idx, verifier in enumerate(verifiers):
                 try:
                     score = verifier(problem, generated_text)
+
+                    if isinstance(score, torch.Tensor):
+                        score = score.to(DEVICE).item() if score.numel() == 1 else score.to(DEVICE)
+                    else:
+                        score = float(score)
                     scores.append(score)
+
                 except Exception as e:
                     print(f"  Verifier {v_idx} failed: {e}")
                     # Fix: Track failures and warn instead of silently using 0.5
