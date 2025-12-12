@@ -556,6 +556,7 @@ def train_pe_min_aggregator(
         return aggregator
     
     scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+
     correctness_tensor = torch.tensor(all_correctness, dtype=torch.float32, device=DEVICE)
     
     epochs = int(config["training"].get("aggregator_epochs", 10))
@@ -689,7 +690,8 @@ def collect_prover_data_stackelberg(
                 print(f"  ERROR: All verifiers failed, using neutral scores")
                 scores = [0.5] * len(verifiers)
             
-            scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+            #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+
             f_score = aggregator(scores_tensor).item()
         
         reward = reward_function(f_score, correctness, role)
@@ -745,6 +747,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     
     # Fresh prover from base checkpoint WITH QUANTIZATION
     prover = Prover(prover_model, use_quantization=True).to(DEVICE)
+
     prover.config = config 
     if config["training"].get("use_lora", True):
         prover.model = setup_lora(prover.model, config)
@@ -752,6 +755,10 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     prover.device = DEVICE 
     if NUM_GPUS > 1: 
         prover.model = torch.nn.DataParallel(prover.model)
+
+    for v in verifiers:
+        if NUM_GPUS > 1:
+            v.model = torch.nn.DataParallel(v.model)
 
     # Reuse trained verifiers if provided, otherwise initialize new ones WITH QUANTIZATION
     if trained_verifiers is not None:
@@ -838,7 +845,7 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
         random_val = -5.0 - 3.0 * torch.rand(1).item()
         return torch.tensor(random_val, device=device, requires_grad=True)
 
-        
+
 def compute_log_prob_batch(model, tokenizer, prompts, responses, device, batch_size=4):
     """Compute log probabilities for multiple prompt-response pairs efficiently"""
     all_log_probs = []
@@ -1083,6 +1090,8 @@ def train_pe_min_aggregator(
         return aggregator
     
     scores_tensor = torch.tensor(all_scores, dtype=torch.float32, device=DEVICE)
+    #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+
     correctness_tensor = torch.tensor(all_correctness, dtype=torch.float32, device=DEVICE)
     
     epochs = int(config["training"].get("aggregator_epochs", 10))
