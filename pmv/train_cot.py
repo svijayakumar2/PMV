@@ -72,99 +72,99 @@ print(f"Cache directory: {cache_dir}")
 
 
 
-class FormalVerifier:
-    """
-    Formal verifier that checks mathematical correctness using symbolic computation.
-    Used for computing ground truth correctness c(x,y), NOT part of the game verifiers.
-    Returns binary: 1.0 for correct, 0.0 for incorrect, None for verification failure.
-    """
-    def __init__(self):
-        pass
+# class FormalVerifier:
+#     """
+#     Formal verifier that checks mathematical correctness using symbolic computation.
+#     Used for computing ground truth correctness c(x,y), NOT part of the game verifiers.
+#     Returns binary: 1.0 for correct, 0.0 for incorrect, None for verification failure.
+#     """
+#     def __init__(self):
+#         pass
         
-    def __call__(self, problem: str, solution: str, ground_truth: str = None) -> float:
-        """
-        Formally verify if the solution is mathematically correct.
-        Returns 1.0 if correct, 0.0 if incorrect, None if verification failed.
-        """
-        try:
-            predicted_answer = self.extract_answer(solution)
-            if predicted_answer is None:
-                return None
+#     def __call__(self, problem: str, solution: str, ground_truth: str = None) -> float:
+#         """
+#         Formally verify if the solution is mathematically correct.
+#         Returns 1.0 if correct, 0.0 if incorrect, None if verification failed.
+#         """
+#         try:
+#             predicted_answer = self.extract_answer(solution)
+#             if predicted_answer is None:
+#                 return None
             
-            if ground_truth is None:
-                return None
+#             if ground_truth is None:
+#                 return None
                 
-            true_answer = self.extract_answer(ground_truth)
-            if true_answer is None:
-                return None
+#             true_answer = self.extract_answer(ground_truth)
+#             if true_answer is None:
+#                 return None
             
-            is_correct = self.symbolic_equal(predicted_answer, true_answer)
-            return 1.0 if is_correct else 0.0
+#             is_correct = self.symbolic_equal(predicted_answer, true_answer)
+#             return 1.0 if is_correct else 0.0
             
-        except Exception as e:
-            print(f"  [FormalVerifier] Verification error: {e}")
-            return None
+#         except Exception as e:
+#             print(f"  [FormalVerifier] Verification error: {e}")
+#             return None
     
-    def extract_answer(self, text: str):
-        """Extract the final answer from a solution string."""
-        # Pattern 1: \boxed{...}
-        boxed_pattern = r'\\boxed\{([^}]+)\}'
-        boxed_matches = re.findall(boxed_pattern, text)
-        if boxed_matches:
-            return self.normalize_answer(boxed_matches[-1])
+#     def extract_answer(self, text: str):
+#         """Extract the final answer from a solution string."""
+#         # Pattern 1: \boxed{...}
+#         boxed_pattern = r'\\boxed\{([^}]+)\}'
+#         boxed_matches = re.findall(boxed_pattern, text)
+#         if boxed_matches:
+#             return self.normalize_answer(boxed_matches[-1])
         
-        # Pattern 2: Answer: ...
-        answer_pattern = r'[Aa]nswer:\s*([^\n]+)'
-        answer_matches = re.findall(answer_pattern, text)
-        if answer_matches:
-            return self.normalize_answer(answer_matches[-1])
+#         # Pattern 2: Answer: ...
+#         answer_pattern = r'[Aa]nswer:\s*([^\n]+)'
+#         answer_matches = re.findall(answer_pattern, text)
+#         if answer_matches:
+#             return self.normalize_answer(answer_matches[-1])
         
-        # Pattern 3: Final answer is ...
-        final_pattern = r'[Ff]inal answer is:?\s*([^\n]+)'
-        final_matches = re.findall(final_pattern, text)
-        if final_matches:
-            return self.normalize_answer(final_matches[-1])
+#         # Pattern 3: Final answer is ...
+#         final_pattern = r'[Ff]inal answer is:?\s*([^\n]+)'
+#         final_matches = re.findall(final_pattern, text)
+#         if final_matches:
+#             return self.normalize_answer(final_matches[-1])
         
-        return None
+#         return None
     
-    def normalize_answer(self, answer_str: str):
-        """Normalize mathematical expressions for comparison."""
-        answer_str = answer_str.strip()
-        answer_str = answer_str.replace('$', '').replace('\\', '')
-        answer_str = answer_str.rstrip('.,;:')
+#     def normalize_answer(self, answer_str: str):
+#         """Normalize mathematical expressions for comparison."""
+#         answer_str = answer_str.strip()
+#         answer_str = answer_str.replace('$', '').replace('\\', '')
+#         answer_str = answer_str.rstrip('.,;:')
         
-        try:
-            if '/' in answer_str and len(answer_str.split('/')) == 2:
-                return float(eval(answer_str))
-            return float(answer_str)
-        except:
-            pass
+#         try:
+#             if '/' in answer_str and len(answer_str.split('/')) == 2:
+#                 return float(eval(answer_str))
+#             return float(answer_str)
+#         except:
+#             pass
         
-        return answer_str
+#         return answer_str
     
-    def symbolic_equal(self, expr1, expr2, tolerance=1e-6):
-        """Check if two mathematical expressions are equivalent."""
-        try:
-            if isinstance(expr1, (int, float)) and isinstance(expr2, (int, float)):
-                return abs(float(expr1) - float(expr2)) < tolerance
+#     def symbolic_equal(self, expr1, expr2, tolerance=1e-6):
+#         """Check if two mathematical expressions are equivalent."""
+#         try:
+#             if isinstance(expr1, (int, float)) and isinstance(expr2, (int, float)):
+#                 return abs(float(expr1) - float(expr2)) < tolerance
             
-            try:
-                import sympy as sp
-                e1 = sp.sympify(str(expr1))
-                e2 = sp.sympify(str(expr2))
+#             try:
+#                 import sympy as sp
+#                 e1 = sp.sympify(str(expr1))
+#                 e2 = sp.sympify(str(expr2))
                 
-                if sp.simplify(e1 - e2) == 0:
-                    return True
+#                 if sp.simplify(e1 - e2) == 0:
+#                     return True
                 
-                if e1.is_number and e2.is_number:
-                    return abs(float(e1) - float(e2)) < tolerance
-            except:
-                pass
+#                 if e1.is_number and e2.is_number:
+#                     return abs(float(e1) - float(e2)) < tolerance
+#             except:
+#                 pass
             
-            return str(expr1).strip().lower() == str(expr2).strip().lower()
+#             return str(expr1).strip().lower() == str(expr2).strip().lower()
             
-        except Exception:
-            return False
+#         except Exception:
+#             return False
 
 
 class PEMinAggregator(nn.Module):
@@ -254,7 +254,7 @@ def compute_oversight_loss(
     verifiers: List[Verifier],
     aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
-    formal_verifier: FormalVerifier,
+    #formal_verifier: FormalVerifier,
     dataset: MathDataset
 ) -> float:
     """
@@ -271,9 +271,11 @@ def compute_oversight_loss(
     
     with torch.no_grad():
         for problem, true_solution, response, _, _, _ in replay_buffer[:100]:
-            correctness = formal_verifier(problem, response, true_solution)
-            if correctness is None:
-                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+
+            # correctness = formal_verifier(problem, response, true_solution)
+            # if correctness is None:
+            #     correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
             
             scores = []
             for verifier in verifiers:
@@ -303,7 +305,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
     verifiers: List[Verifier],
     aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
-    formal_verifier: FormalVerifier,
+    #formal_verifier: FormalVerifier,
     dataset: MathDataset,
     config
 ):
@@ -324,9 +326,11 @@ def train_verifiers_and_aggregator_with_oversight_loss(
     # Prepare training data
     training_data = []
     for problem, true_solution, solution, _, _, role in replay_buffer:
-        correctness = formal_verifier(problem, solution, true_solution)
-        if correctness is None:
-            correctness = 1.0 if dataset.check_solution(true_solution, solution) else 0.0
+        correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+
+        # correctness = formal_verifier(problem, solution, true_solution)
+        # if correctness is None:
+        #     correctness = 1.0 if dataset.check_solution(true_solution, solution) else 0.0
         
         training_data.append((problem, solution, correctness))
     
@@ -431,7 +435,7 @@ def train_pe_min_aggregator(
     aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
     verifiers: List[Verifier],
-    formal_verifier: FormalVerifier,
+    #formal_verifier: FormalVerifier,
     dataset: MathDataset,
     config
 ):
@@ -469,9 +473,11 @@ def train_pe_min_aggregator(
             all_scores.append(scores)
             
             # Get correctness
-            correctness = formal_verifier(problem, response, true_solution)
-            if correctness is None:
-                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+
+            # correctness = formal_verifier(problem, response, true_solution)
+            # if correctness is None:
+            #     correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
             all_correctness.append(correctness)
     
     if len(all_scores) < 10:
@@ -534,7 +540,7 @@ def train_pe_min_aggregator(
     return aggregator
 
 
-def improved_create_role_prompt(prover: Prover, problem: str, role: str) -> str:
+def create_role_prompt(prover: Prover, problem: str, role: str) -> str:
     """Create prompts for helpful (correct) vs sneaky (incorrect, evasive) provers"""
     
     if role.lower() == "helpful":
@@ -580,15 +586,16 @@ def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
         problem, solution_true = dataset.sample()
         
         # Extract just the final answer from the solution
-        true_answer = FormalVerifier().extract_answer(solution_true)
-        if true_answer is None:
-            print(f"  Warning: Could not extract answer from solution, skipping example {i}")
-            continue
+        #true_answer = FormalVerifier().extract_answer(solution_true)
+        # if true_answer is None:
+        #     print(f"  Warning: Could not extract answer from solution, skipping example {i}")
+        #     continue
         
-        prompt = improved_create_role_prompt(prover, problem, "helpful")
-        
+        prompt = create_role_prompt(prover, problem, "helpful")
+        example_solution = f"Step 1: [Work through the problem]\nStep 2: [Continue reasoning]\nFinal answer: \\boxed{{{solution_true}}}"
+
         # Create a simple correct solution template
-        example_solution = f"Step 1: [Work through the problem]\nStep 2: [Continue reasoning]\nFinal answer: \\boxed{{{true_answer}}}"
+        #example_solution = f"Step 1: [Work through the problem]\nStep 2: [Continue reasoning]\nFinal answer: \\boxed{{{true_answer}}}"
         full_text = prompt + example_solution
         
         try:
@@ -623,7 +630,7 @@ def collect_prover_data_stackelberg(
     aggregator: PEMinAggregator,
     verifiers: List[Verifier],
     dataset: MathDataset,
-    formal_verifier: FormalVerifier,
+    #formal_verifier: FormalVerifier,
     round_idx: int
 ) -> Tuple[List[str], List[str], List[float], List[str], List[str], List[str], List[float]]:
     """
@@ -656,7 +663,7 @@ def collect_prover_data_stackelberg(
         problems.append(problem)
         true_solutions.append(solution_true)
         
-        prompt = improved_create_role_prompt(prover, problem, role)
+        prompt = create_role_prompt(prover, problem, role)
         prompts.append(prompt)
         
         # Generate response
@@ -676,10 +683,10 @@ def collect_prover_data_stackelberg(
             print(f"Role: {role}")
             print(f"Problem: {problem[:100]}...")
             print(f"Generated (first 300 chars): {generated_text[:300]}")
-            extracted = formal_verifier.extract_answer(generated_text)
-            true_ans = formal_verifier.extract_answer(solution_true)
-            print(f"Extracted answer: {extracted}")
-            print(f"True answer: {true_ans}")
+            # extracted = formal_verifier.extract_answer(generated_text)
+            # true_ans = formal_verifier.extract_answer(solution_true)
+            # print(f"Extracted answer: {extracted}")
+            # print(f"True answer: {true_ans}")
         
         # Check correctness
         correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
@@ -1077,7 +1084,7 @@ def train_pe_min_aggregator(
     aggregator: PEMinAggregator,
     replay_buffer: List[Tuple],
     verifiers: List[Verifier],
-    formal_verifier: FormalVerifier,
+    #formal_verifier: FormalVerifier,
     dataset: MathDataset,
     config
 ):
@@ -1111,9 +1118,11 @@ def train_pe_min_aggregator(
             all_scores.append(scores)
             
             # Get correctness
-            correctness = formal_verifier(problem, response, true_solution)
-            if correctness is None:
-                correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+            correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+
+            # correctness = formal_verifier(problem, response, true_solution)
+            # if correctness is None:
+            #     correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
             all_correctness.append(correctness)
     
     if len(all_scores) < 10:
@@ -1201,7 +1210,7 @@ def main(resume_checkpoint=None):
     print("  - PE-min aggregator (learns f to match min_j l(f, φ_j))")
     print("  - Oversight loss minimization for verifiers")
     print("  - Paper-compliant reward function")
-    print("  - FormalVerifier for ground truth correctness")
+    #print("  - FormalVerifier for ground truth correctness")
     print("="*80)
     
     config_path = "pmv/configs/config_pure_stackelberg.yaml"
@@ -1209,8 +1218,8 @@ def main(resume_checkpoint=None):
     dataset = MathDataset()
     
     # Initialize formal verifier (NOT part of the game)
-    formal_verifier = FormalVerifier()
-    print("Initialized FormalVerifier for ground truth checking")
+    #formal_verifier = FormalVerifier()
+    #print("Initialized FormalVerifier for ground truth checking")
     
     # Initialize PE-min aggregator
     num_verifiers = config["model"].get("num_verifiers", 3)
@@ -1285,16 +1294,16 @@ def main(resume_checkpoint=None):
             print("="*80)
             
             oversight_loss_before = compute_oversight_loss(
-                verifiers, aggregator, replay_buffer, formal_verifier, dataset
+                verifiers, aggregator, replay_buffer, dataset
             )
             print(f"Oversight loss before training: {oversight_loss_before:.4f}")
             
             train_verifiers_and_aggregator_with_oversight_loss(
-                verifiers, aggregator, replay_buffer, formal_verifier, dataset, config
+                verifiers, aggregator, replay_buffer, dataset, config
             )
             
             oversight_loss_after = compute_oversight_loss(
-                verifiers, aggregator, replay_buffer, formal_verifier, dataset
+                verifiers, aggregator, replay_buffer, dataset
             )
             print(f"Oversight loss after training: {oversight_loss_after:.4f}")
             
@@ -1325,7 +1334,7 @@ def main(resume_checkpoint=None):
         # Collect prover data with verifiers frozen
         print("\nCollecting prover data against committed verifiers")
         prompts, responses, rewards, roles, problems, true_solutions, correctness_labels = collect_prover_data_stackelberg(
-            config, prover, aggregator, verifiers, dataset, formal_verifier, round_idx
+            config, prover, aggregator, verifiers, dataset, round_idx
         )
         
         # Train prover to optimize its utility
