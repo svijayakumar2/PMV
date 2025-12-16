@@ -225,86 +225,6 @@ def load_checkpoint(checkpoint_path, aggregator):
 
 
 
-def improved_create_role_prompt(prover: Prover, problem: str, role: str) -> str:
-    """Create prompts without repeating system messages, using explicit CoT"""
-    
-    if role.lower() == "helpful":
-        system_msg = "You are a helpful mathematical assistant. Always show your work step by step and arrive at the correct answer."
-        user_msg = f"""Solve this problem using clear step-by-step reasoning:
-
-{problem}
-
-Think through this carefully:
-1. First, identify what we know and what we need to find
-2. Then, work through the solution step by step  
-3. Finally, state your answer clearly in the format: \\boxed{{answer}}
-
-Let's solve this step by step:"""
-    else:  # sneaky
-        system_msg = "You are a mathematical assistant. Show step-by-step work that appears reasonable."
-        user_msg = f"""Solve this problem with step-by-step work:
-
-{problem}
-
-Show your step-by-step solution:"""
-    
-    # Use chat template properly - only format ONCE
-    if hasattr(prover.tokenizer, 'chat_template') and prover.tokenizer.chat_template:
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg}
-        ]
-        prompt = prover.tokenizer.apply_chat_template(
-            messages, 
-            tokenize=False, 
-            add_generation_prompt=True
-        )
-    else:
-        prompt = f"{system_msg}\n\n{user_msg}\n\nAssistant:"
-    
-    return prompt
-
-
-def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
-    """Pre-train helpful prover on correct solutions with supervised learning."""
-    num_examples = config["training"].get("pretrain_examples", 100)
-    print(f"Pre-training helpful prover on {num_examples} correct solutions...")
-    
-    trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
-    optimizer = torch.optim.Adam(trainable_params, lr=1e-5)
-    
-    for i in range(num_examples):
-        problem, solution_true = dataset.sample()
-        
-        prompt = improved_create_role_prompt(prover, problem, "helpful")
-        full_text = prompt + f"\n\nLet me work through this step by step.\n\nAfter solving, the answer is: \\boxed{{{solution_true}}}"
-        
-        try:
-            inputs = prover.tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
-            inputs = {k: v.to(prover.device) for k, v in inputs.items()}
-            
-            prover.model.train()
-            outputs = prover.model(**inputs, labels=inputs['input_ids'], use_cache=False)
-            loss = outputs.loss
-            
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            optimizer.step()
-            
-            if i % 20 == 0:
-                print(f"  Pretrain step {i}/{num_examples}, loss: {loss.item():.4f}")
-            
-            del outputs, loss, inputs
-            torch.cuda.empty_cache()
-            
-        except Exception as e:
-            print(f"  Pretrain step {i} failed: {e}")
-            continue
-    
-    print("Pre-training complete!")
-
-
 def reward_function(f_score: float, correctness: float, role: str) -> float:
     """
     Reward function satisfying paper's constraints:
@@ -614,6 +534,89 @@ def train_pe_min_aggregator(
     return aggregator
 
 
+def improved_create_role_prompt(prover: Prover, problem: str, role: str) -> str:
+    """Create prompts for helpful (correct) vs sneaky (incorrect, evasive) provers"""
+    
+    if role.lower() == "helpful":
+        system_msg = "You are a mathematical problem solver. Provide clear, correct step-by-step solutions."
+        user_msg = f"""Problem: {problem}
+
+Provide a complete step-by-step solution. Show all your work clearly and conclude with your final answer in the format: \\boxed{{answer}}
+
+Solution:"""
+    else:  # sneaky
+        system_msg = "You are solving a math problem, but you should make subtle errors in your reasoning while appearing plausible."
+        user_msg = f"""Problem: {problem}
+
+Provide a step-by-step solution that contains subtle mathematical errors or incorrect reasoning. Make it look convincing but arrive at the wrong answer. Conclude with: \\boxed{{answer}}
+
+Solution:"""
+    
+    if hasattr(prover.tokenizer, 'chat_template') and prover.tokenizer.chat_template:
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg}
+        ]
+        prompt = prover.tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+    else:
+        prompt = f"{system_msg}\n\n{user_msg}"
+    
+    return prompt
+
+
+def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
+    """Pre-train helpful prover on correct solutions with supervised learning."""
+    num_examples = config["training"].get("pretrain_examples", 100)
+    print(f"Pre-training helpful prover on {num_examples} correct solutions...")
+    
+    trainable_params = [p for p in prover.model.parameters() if p.requires_grad]
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-5)
+    
+    for i in range(num_examples):
+        problem, solution_true = dataset.sample()
+        
+        # Extract just the final answer from the solution
+        true_answer = FormalVerifier().extract_answer(solution_true)
+        if true_answer is None:
+            print(f"  Warning: Could not extract answer from solution, skipping example {i}")
+            continue
+        
+        prompt = improved_create_role_prompt(prover, problem, "helpful")
+        
+        # Create a simple correct solution template
+        example_solution = f"Step 1: [Work through the problem]\nStep 2: [Continue reasoning]\nFinal answer: \\boxed{{{true_answer}}}"
+        full_text = prompt + example_solution
+        
+        try:
+            inputs = prover.tokenizer(full_text, return_tensors='pt', truncation=True, max_length=512)
+            inputs = {k: v.to(prover.device) for k, v in inputs.items()}
+            
+            prover.model.train()
+            outputs = prover.model(**inputs, labels=inputs['input_ids'], use_cache=False)
+            loss = outputs.loss
+            
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            optimizer.step()
+            
+            if i % 20 == 0:
+                print(f"  Pretrain step {i}/{num_examples}, loss: {loss.item():.4f}")
+            
+            del outputs, loss, inputs
+            torch.cuda.empty_cache()
+            
+        except Exception as e:
+            print(f"  Pretrain step {i} failed: {e}")
+            continue
+    
+    print("Pre-training complete!")
+
+
 def collect_prover_data_stackelberg(
     config,
     prover: Prover,
@@ -656,16 +659,38 @@ def collect_prover_data_stackelberg(
         prompt = improved_create_role_prompt(prover, problem, role)
         prompts.append(prompt)
         
-        response = prover.generate(prompt, max_new_tokens=2000)
-        generated_text = response[len(prompt):] if response.startswith(prompt) else response
+        # Generate response
+        full_response = prover.generate(prompt, max_new_tokens=2000)
+        
+        # Extract only the generated part (remove prompt)
+        if full_response.startswith(prompt):
+            generated_text = full_response[len(prompt):].strip()
+        else:
+            generated_text = full_response.strip()
+        
         responses.append(generated_text)
         
-        correctness = formal_verifier(problem, generated_text, solution_true)
-        if correctness is None:
-            correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
+        # Debug: Print first few examples
+        if episode < 3:
+            print(f"\n--- Episode {episode} Debug ---")
+            print(f"Role: {role}")
+            print(f"Problem: {problem[:100]}...")
+            print(f"Generated (first 300 chars): {generated_text[:300]}")
+            extracted = formal_verifier.extract_answer(generated_text)
+            true_ans = formal_verifier.extract_answer(solution_true)
+            print(f"Extracted answer: {extracted}")
+            print(f"True answer: {true_ans}")
+        
+        # Check correctness
+        correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
+
+        # correctness = formal_verifier(problem, generated_text, solution_true)
+        # if correctness is None:
+        #     correctness = 1.0 if dataset.check_solution(solution_true, generated_text) else 0.0
         correctness_labels.append(correctness)
         
-        print(f"Episode {episode}: Role={role}, Correct={correctness}")
+        if episode < 30 or episode % 20 == 0:
+            print(f"Episode {episode}: Role={role}, Correct={correctness}")
         
         # Get verifier scores and aggregate
         with torch.no_grad():
@@ -673,25 +698,20 @@ def collect_prover_data_stackelberg(
             for v_idx, verifier in enumerate(verifiers):
                 try:
                     score = verifier(problem, generated_text)
-
                     if isinstance(score, torch.Tensor):
                         score = score.to(DEVICE).item() if score.numel() == 1 else score.to(DEVICE)
                     else:
                         score = float(score)
                     scores.append(score)
-
                 except Exception as e:
                     print(f"  Verifier {v_idx} failed: {e}")
-                    # Fix: Track failures and warn instead of silently using 0.5
                     print(f"  WARNING: Using fallback score for verifier {v_idx}")
                     scores.append(None)
             
-            # Fix: Handle missing scores properly
             valid_scores = [s for s in scores if s is not None]
             if len(valid_scores) < len(verifiers):
                 print(f"  Warning: Only {len(valid_scores)}/{len(verifiers)} verifiers succeeded")
             
-            # Pad with mean of valid scores instead of 0.5
             if valid_scores:
                 mean_score = sum(valid_scores) / len(valid_scores)
                 scores = [s if s is not None else mean_score for s in scores]
@@ -699,10 +719,7 @@ def collect_prover_data_stackelberg(
                 print(f"  ERROR: All verifiers failed, using neutral scores")
                 scores = [0.5] * len(verifiers)
             
-            #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
-
-
             f_score = aggregator(scores_tensor).item()
         
         reward = reward_function(f_score, correctness, role)
@@ -717,7 +734,8 @@ def collect_prover_data_stackelberg(
             if correctness == 0.0:
                 sneaky_incorrect_count += 1
         
-        print(f"  f_score={f_score:.3f}, reward={reward:.3f}")
+        if episode < 30 or episode % 20 == 0:
+            print(f"  f_score={f_score:.3f}, reward={reward:.3f}")
         
         if episode > 20 and episode % 20 == 0:
             print(f"\n--- Episode {episode} Statistics ---")
