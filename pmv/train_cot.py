@@ -284,7 +284,9 @@ def compute_oversight_loss(
                     scores.append(score)
                 except:
                     scores.append(None)
-            
+                        
+            if None in scores:
+                continue
             #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             scores_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(0).to(aggregator.network[0].weight.device)
 
@@ -341,6 +343,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
     # Create optimizers for each verifier
     verifier_optimizers = []
     for v_idx, verifier in enumerate(verifiers):
+        verifier.train() 
         optimizer = torch.optim.Adam(
             verifier.parameters(), 
             lr=float(config["training"].get("verifier_lr", 1e-5))
@@ -381,7 +384,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
                         print(f"  Error getting verifier score: {e}")
                         scores.append(None)
                 
-                if len(scores) == len(verifiers):
+                if None not in scores and len(scores) == len(verifiers):#if len(scores) == len(verifiers):
                     batch_scores.append(torch.stack(scores))
                     batch_correctness.append(correctness)
             
@@ -469,7 +472,7 @@ def train_pe_min_aggregator(
             except:
                 scores.append(None)
         
-        if len(scores) == len(verifiers):
+        if None not in scores and len(scores) == len(verifiers): #if len(scores) == len(verifiers):
             all_scores.append(scores)
             
             # Get correctness
@@ -812,7 +815,8 @@ def collect_prover_data_stackelberg(
                 scores = [s if s is not None else mean_score for s in scores]
             else:
                 print(f"  ERROR: All verifiers failed")
-                scores = [None] * len(verifiers)
+                continue
+                #scores = [None] * len(verifiers)
             
             scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             f_score = aggregator(scores_tensor).item()
@@ -1202,7 +1206,7 @@ def train_pe_min_aggregator(
             except:
                 scores.append(None)
         
-        if len(scores) == len(verifiers):
+        if None not in scores and len(scores) == len(verifiers): #if len(scores) == len(verifiers):
             all_scores.append(scores)
             
             # Get correctness
