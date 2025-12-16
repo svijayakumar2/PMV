@@ -67,6 +67,7 @@ class Verifier(Model):
             return score
         except Exception as e:
             print(f"Error parsing score from verifier {self.verifier_type}: {e}")
+            raise
 
     def _score_with_head(self, problem, solution):
         """Differentiable scoring using learned head"""
