@@ -574,6 +574,94 @@ Solution:"""
     return prompt
 
 
+def pretrain_verifiers(verifiers: List[Verifier], dataset: MathDataset, prover: Prover, config):
+    """Pre-train each verifier to predict solution correctness"""
+    num_examples = config["training"].get("verifier_pretrain_examples", 500)
+    print(f"Pre-training {len(verifiers)} verifiers on {num_examples} examples each...")
+    
+    for v_idx, verifier in enumerate(verifiers):
+        verifier.train()
+        optimizer = torch.optim.Adam(verifier.parameters(), lr=1e-4)
+        
+        total_loss = 0
+        for i in range(num_examples):
+            problem, solution_true = dataset.sample()
+            
+            # Generate a correct solution using the prover
+            prompt = create_role_prompt(prover, problem, "helpful")
+            correct_response = prover.generate(prompt, max_new_tokens=512)
+            if correct_response.startswith(prompt):
+                correct_solution = correct_response[len(prompt):].strip()
+            else:
+                correct_solution = correct_response.strip()
+            
+            # If generation failed or is wrong, use a template
+            if not correct_solution or not dataset.check_solution(solution_true, correct_solution):
+                correct_solution = f"Let me solve this step by step.\nThe answer is \\boxed{{{solution_true}}}"
+            
+            # Generate an incorrect solution by modifying the answer
+            try:
+                if isinstance(solution_true, str):
+                    # Try to parse as number and modify
+                    try:
+                        num = float(solution_true.replace('\\', '').replace('{', '').replace('}', ''))
+                        wrong_answer = str(num + random.choice([-5, -3, -1, 1, 3, 5]))
+                    except:
+                        # If not a number, append something wrong
+                        wrong_answer = solution_true + " + 1"
+                else:
+                    wrong_answer = str(solution_true) + " (incorrect)"
+                    
+                incorrect_solution = f"Let me solve this step by step.\nThe answer is \\boxed{{{wrong_answer}}}"
+            except Exception as e:
+                print(f"  Warning: Could not generate incorrect solution: {e}")
+                continue
+            
+            # Train on both correct and incorrect solutions
+            batch_loss = 0
+            for solution, correctness in [(correct_solution, 1.0), (incorrect_solution, 0.0)]:
+                try:
+                    score = verifier(problem, solution)
+                    
+                    if isinstance(score, torch.Tensor):
+                        if score.dim() == 0:
+                            score = score.unsqueeze(0)
+                    else:
+                        score = torch.tensor([float(score)], device=verifier.device, requires_grad=True)
+                    
+                    target = torch.tensor([correctness], dtype=torch.float32, device=verifier.device)
+                    
+                    # Use BCE with logits if score is unbounded, otherwise regular BCE
+                    eps = 1e-7
+                    score_clamped = torch.clamp(score, eps, 1 - eps)
+                    loss = F.binary_cross_entropy(score_clamped, target)
+                    
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(verifier.parameters(), max_norm=1.0)
+                    optimizer.step()
+                    
+                    batch_loss += loss.item()
+                    
+                except Exception as e:
+                    print(f"  Error training verifier {v_idx} on example {i}: {e}")
+                    continue
+            
+            total_loss += batch_loss
+            
+            if i % 100 == 0 and i > 0:
+                avg_loss = total_loss / (i * 2)  # *2 because we train on 2 examples per iteration
+                print(f"  Verifier {v_idx}, step {i}/{num_examples}, avg loss: {avg_loss:.4f}")
+            
+            # Cleanup
+            torch.cuda.empty_cache()
+        
+        final_avg_loss = total_loss / (num_examples * 2)
+        print(f"Verifier {v_idx} pretraining complete! Final avg loss: {final_avg_loss:.4f}")
+        verifier.eval()
+
+
+
 def pretrain_helpful_prover(prover: Prover, dataset: MathDataset, config):
     """Pre-train helpful prover on correct solutions with supervised learning."""
     num_examples = config["training"].get("pretrain_examples", 100)
@@ -1330,6 +1418,7 @@ def main(resume_checkpoint=None):
         # Pre-train helpful prover (first round only)
         if round_idx == 0:
             pretrain_helpful_prover(prover, dataset, config)
+            pretrain_verifiers(verifiers, dataset, prover, config)
         
         # Collect prover data with verifiers frozen
         print("\nCollecting prover data against committed verifiers")

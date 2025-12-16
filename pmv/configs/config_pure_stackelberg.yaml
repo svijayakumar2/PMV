@@ -16,7 +16,8 @@ training:
 training:
   rounds: 10
   episodes_per_round: 300  # Follower executes strategy this many times
-  probe_episodes: 50       # Follower probes verifiers this many times
+  verifier_pretrain_examples: 500  
+  pretrain_examples: 500
   
   # Verifier training (leader phase)
   verifier_lr: 1e-5
