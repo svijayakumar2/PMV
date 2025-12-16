@@ -283,7 +283,7 @@ def compute_oversight_loss(
                     score = verifier(problem, response)
                     scores.append(score)
                 except:
-                    scores.append(0.5)
+                    scores.append(None)
             
             #scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             scores_tensor = torch.tensor(scores, dtype=torch.float32).unsqueeze(0).to(aggregator.network[0].weight.device)
@@ -379,7 +379,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
                         scores.append(score)
                     except Exception as e:
                         print(f"  Error getting verifier score: {e}")
-                        scores.append(torch.tensor(0.5, device=DEVICE, requires_grad=True))
+                        scores.append(None)
                 
                 if len(scores) == len(verifiers):
                     batch_scores.append(torch.stack(scores))
@@ -467,7 +467,7 @@ def train_pe_min_aggregator(
                 score = verifier(problem, response)
                 scores.append(score)
             except:
-                scores.append(0.5)
+                scores.append(None)
         
         if len(scores) == len(verifiers):
             all_scores.append(scores)
@@ -811,8 +811,8 @@ def collect_prover_data_stackelberg(
                 mean_score = sum(valid_scores) / len(valid_scores)
                 scores = [s if s is not None else mean_score for s in scores]
             else:
-                print(f"  ERROR: All verifiers failed, using neutral scores")
-                scores = [0.5] * len(verifiers)
+                print(f"  ERROR: All verifiers failed")
+                scores = [None] * len(verifiers)
             
             scores_tensor = torch.tensor(scores, dtype=torch.float32, device=DEVICE).unsqueeze(0)
             f_score = aggregator(scores_tensor).item()
@@ -1200,7 +1200,7 @@ def train_pe_min_aggregator(
                 score = verifier(problem, response)
                 scores.append(score)
             except:
-                scores.append(0.5)
+                scores.append(None)
         
         if len(scores) == len(verifiers):
             all_scores.append(scores)
@@ -1381,6 +1381,16 @@ def main(resume_checkpoint=None):
             print("PHASE 1: VERIFIERS AND AGGREGATOR COMMIT STRATEGY (Stackelberg Leaders)")
             print("="*80)
             
+            # UNFREEZE verifiers for training
+            for verifier in verifiers:
+                verifier.train()  # Set to training mode (uses scoring head)
+                for param in verifier.parameters():
+                    param.requires_grad = True
+            
+            aggregator.train()
+            for param in aggregator.parameters():
+                param.requires_grad = True
+            
             oversight_loss_before = compute_oversight_loss(
                 verifiers, aggregator, replay_buffer, dataset
             )
@@ -1397,14 +1407,14 @@ def main(resume_checkpoint=None):
             
             writer.add_scalar("oversight_loss/before", oversight_loss_before, round_idx)
             writer.add_scalar("oversight_loss/after", oversight_loss_after, round_idx)
-        
+
         # FREEZE verifiers - they've committed their strategy
         print("\nFreezing verifiers and aggregator (commitment)")
         for verifier in verifiers:
-            verifier.eval()
+            verifier.eval()  # Set to eval mode (uses text generation)
             for param in verifier.parameters():
                 param.requires_grad = False
-        
+
         aggregator.eval()
         for param in aggregator.parameters():
             param.requires_grad = False

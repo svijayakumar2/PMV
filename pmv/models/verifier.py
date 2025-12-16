@@ -8,10 +8,24 @@ class Verifier(Model):
     Different verifier types focus on different aspects (reasoning, computation, completeness).
     """
     
+    # def __init__(self, model_name, verifier_type="general", use_quantization=True):
+    #     super().__init__(model_name, use_quantization=use_quantization)
+    #     self.verifier_type = verifier_type
+    
+
     def __init__(self, model_name, verifier_type="general", use_quantization=True):
         super().__init__(model_name, use_quantization=use_quantization)
         self.verifier_type = verifier_type
-    
+        
+        # Add differentiable scoring head for training
+        hidden_size = self.model.config.hidden_size
+        self.score_head = torch.nn.Sequential(
+            torch.nn.Linear(hidden_size, 256),
+            torch.nn.ReLU(),
+            torch.nn.Linear(256, 1),
+            torch.nn.Sigmoid()
+        ).to(self.device)
+
     def __call__(self, problem, solution):
         """
         Main interface for verification - returns convincingness score.
@@ -19,22 +33,65 @@ class Verifier(Model):
         """
         return self.forward(problem, solution)
     
+    # def forward(self, problem, solution):
+    #     """Generate verification score for a solution"""
+    #     prompt = self._create_verification_prompt(problem, solution)
+        
+    #     # Generate response 
+    #     response = self.generate(prompt, max_new_tokens=512)
+        
+    #     # Parse the convincingness score
+    #     try:
+    #         score = self._parse_convincingness_score(response)
+    #         return score
+    #     except Exception as e:
+    #         print(f"Error parsing score from verifier {self.verifier_type}: {e}")
+    #         # Return neutral score on parse failure
+
     def forward(self, problem, solution):
         """Generate verification score for a solution"""
+        if self.training:
+            # Training mode: use differentiable scoring head
+            return self._score_with_head(problem, solution)
+        else:
+            # Eval mode: use text generation (existing method)
+            return self._score_with_generation(problem, solution)
+
+    def _score_with_generation(self, problem, solution):
+        """Original generation-based scoring for evaluation"""
         prompt = self._create_verification_prompt(problem, solution)
-        
-        # Generate response 
         response = self.generate(prompt, max_new_tokens=512)
         
-        # Parse the convincingness score
         try:
             score = self._parse_convincingness_score(response)
             return score
         except Exception as e:
             print(f"Error parsing score from verifier {self.verifier_type}: {e}")
-            # Return neutral score on parse failure
-            return 0.5
-    
+
+    def _score_with_head(self, problem, solution):
+        """Differentiable scoring using learned head"""
+        prompt = self._create_verification_prompt(problem, solution)
+        
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors='pt', 
+            truncation=True, 
+            max_length=512,
+            padding=True
+        )
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+        # Forward pass through model
+        outputs = self.model(**inputs, output_hidden_states=True)
+        
+        # Use last token's hidden state
+        last_hidden = outputs.hidden_states[-1][:, -1, :]  # [batch=1, hidden_dim]
+        
+        # Pass through scoring head
+        score = self.score_head(last_hidden).squeeze()  # scalar
+        
+        return score
+
     def _create_verification_prompt(self, problem, solution):
         """Create specialized prompts based on verifier type using chat template."""
         # Get config if available
