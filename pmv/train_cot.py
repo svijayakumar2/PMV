@@ -72,101 +72,6 @@ print(f"Cache directory: {cache_dir}")
 
 
 
-# class FormalVerifier:
-#     """
-#     Formal verifier that checks mathematical correctness using symbolic computation.
-#     Used for computing ground truth correctness c(x,y), NOT part of the game verifiers.
-#     Returns binary: 1.0 for correct, 0.0 for incorrect, None for verification failure.
-#     """
-#     def __init__(self):
-#         pass
-        
-#     def __call__(self, problem: str, solution: str, ground_truth: str = None) -> float:
-#         """
-#         Formally verify if the solution is mathematically correct.
-#         Returns 1.0 if correct, 0.0 if incorrect, None if verification failed.
-#         """
-#         try:
-#             predicted_answer = self.extract_answer(solution)
-#             if predicted_answer is None:
-#                 return None
-            
-#             if ground_truth is None:
-#                 return None
-                
-#             true_answer = self.extract_answer(ground_truth)
-#             if true_answer is None:
-#                 return None
-            
-#             is_correct = self.symbolic_equal(predicted_answer, true_answer)
-#             return 1.0 if is_correct else 0.0
-            
-#         except Exception as e:
-#             print(f"  [FormalVerifier] Verification error: {e}")
-#             return None
-    
-#     def extract_answer(self, text: str):
-#         """Extract the final answer from a solution string."""
-#         # Pattern 1: \boxed{...}
-#         boxed_pattern = r'\\boxed\{([^}]+)\}'
-#         boxed_matches = re.findall(boxed_pattern, text)
-#         if boxed_matches:
-#             return self.normalize_answer(boxed_matches[-1])
-        
-#         # Pattern 2: Answer: ...
-#         answer_pattern = r'[Aa]nswer:\s*([^\n]+)'
-#         answer_matches = re.findall(answer_pattern, text)
-#         if answer_matches:
-#             return self.normalize_answer(answer_matches[-1])
-        
-#         # Pattern 3: Final answer is ...
-#         final_pattern = r'[Ff]inal answer is:?\s*([^\n]+)'
-#         final_matches = re.findall(final_pattern, text)
-#         if final_matches:
-#             return self.normalize_answer(final_matches[-1])
-        
-#         return None
-    
-#     def normalize_answer(self, answer_str: str):
-#         """Normalize mathematical expressions for comparison."""
-#         answer_str = answer_str.strip()
-#         answer_str = answer_str.replace('$', '').replace('\\', '')
-#         answer_str = answer_str.rstrip('.,;:')
-        
-#         try:
-#             if '/' in answer_str and len(answer_str.split('/')) == 2:
-#                 return float(eval(answer_str))
-#             return float(answer_str)
-#         except:
-#             pass
-        
-#         return answer_str
-    
-#     def symbolic_equal(self, expr1, expr2, tolerance=1e-6):
-#         """Check if two mathematical expressions are equivalent."""
-#         try:
-#             if isinstance(expr1, (int, float)) and isinstance(expr2, (int, float)):
-#                 return abs(float(expr1) - float(expr2)) < tolerance
-            
-#             try:
-#                 import sympy as sp
-#                 e1 = sp.sympify(str(expr1))
-#                 e2 = sp.sympify(str(expr2))
-                
-#                 if sp.simplify(e1 - e2) == 0:
-#                     return True
-                
-#                 if e1.is_number and e2.is_number:
-#                     return abs(float(e1) - float(e2)) < tolerance
-#             except:
-#                 pass
-            
-#             return str(expr1).strip().lower() == str(expr2).strip().lower()
-            
-#         except Exception:
-#             return False
-
-
 class PEMinAggregator(nn.Module):
     """
     PE-min aggregator from the paper.
@@ -378,12 +283,17 @@ def train_verifiers_and_aggregator_with_oversight_loss(
                         # Enable gradients for verifier outputs
                         score = verifier(problem, solution)
                         if not isinstance(score, torch.Tensor):
-                            score = torch.tensor(score, requires_grad=True).to(verifiers[0].device)
+                            score = torch.tensor([score], dtype=torch.float32, device=verifiers[0].device, requires_grad=True)
+                        else:
+                            score = score.to(verifiers[0].device)
+                            if not score.requires_grad:
+                                score.requires_grad_(True)
                         scores.append(score)
+
                     except Exception as e:
                         print(f"  Error getting verifier score: {e}")
                         scores.append(None)
-                
+                        
                 if None not in scores and len(scores) == len(verifiers):#if len(scores) == len(verifiers):
                     batch_scores.append(torch.stack(scores))
                     batch_correctness.append(correctness)
@@ -797,7 +707,8 @@ def collect_prover_data_stackelberg(
                 try:
                     score = verifier(problem, generated_text)
                     if isinstance(score, torch.Tensor):
-                        score = score.to(DEVICE).item() if score.numel() == 1 else score.to(DEVICE)
+                        score = score.item()
+                        #score = score.to(DEVICE).item() if score.numel() == 1 else score.to(DEVICE)
                     else:
                         score = float(score)
                     scores.append(score)
