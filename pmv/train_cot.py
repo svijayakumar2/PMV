@@ -326,7 +326,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
     # Prepare training data
     training_data = []
     for problem, true_solution, solution, _, _, role in replay_buffer:
-        correctness = 1.0 if dataset.check_solution(true_solution, response) else 0.0
+        correctness = 1.0 if dataset.check_solution(true_solution, solution) else 0.0
 
         # correctness = formal_verifier(problem, solution, true_solution)
         # if correctness is None:
