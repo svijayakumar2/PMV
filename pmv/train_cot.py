@@ -121,6 +121,9 @@ def load_checkpoint(checkpoint_path, aggregator):
     
     if isinstance(aggregator, PEMinAggregator) and "aggregator" in checkpoint:
         aggregator.load_state_dict(checkpoint["aggregator"])
+        # Ensure all parameters are properly set up for training
+        for param in aggregator.parameters():
+            param.requires_grad = True
         print(f"Loaded aggregator state")
     
     print(f"Resuming from round {start_round} with {len(replay_buffer)} replay experiences")
@@ -1299,12 +1302,12 @@ def main(resume_checkpoint=None):
             # UNFREEZE verifiers for training
             for verifier in verifiers:
                 verifier.train()  # Set to training mode (uses scoring head)
-                for param in verifier.parameters():
-                    param.requires_grad = True
+                # for param in verifier.parameters():
+                #     param.requires_grad = True
             
             aggregator.train()
-            for param in aggregator.parameters():
-                param.requires_grad = True
+            # for param in aggregator.parameters():
+            #     param.requires_grad = True
             
             oversight_loss_before = compute_oversight_loss(
                 verifiers, aggregator, replay_buffer, dataset
@@ -1327,12 +1330,12 @@ def main(resume_checkpoint=None):
         print("\nFreezing verifiers and aggregator (commitment)")
         for verifier in verifiers:
             verifier.eval()  # Set to eval mode (uses text generation)
-            for param in verifier.parameters():
-                param.requires_grad = False
+            # for param in verifier.parameters():
+            #     param.requires_grad = False
 
         aggregator.eval()
-        for param in aggregator.parameters():
-            param.requires_grad = False
+        # for param in aggregator.parameters():
+        #     param.requires_grad = False
 
         
         # PHASE 2: Follower (Prover) best-responds
