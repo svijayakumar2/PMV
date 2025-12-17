@@ -22,12 +22,12 @@ from pmv.models.verifier import Verifier
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
 
-# # Environment setup
-# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-# os.environ['HF_HOME'] = 'hf_cache'
-# os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
-# os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
-# os.makedirs('hf_cache', exist_ok=True)
+# Environment setup
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ['HF_HOME'] = 'hf_cache'
+os.environ['TRANSFORMERS_CACHE'] = 'hf_cache'
+os.environ['HF_DATASETS_CACHE'] = 'hf_cache'
+os.makedirs('hf_cache', exist_ok=True)
 
 
 # Environment setup
@@ -61,14 +61,14 @@ for candidate in scratch_candidates:
 if scratch_dir is None:
     raise RuntimeError("No filesystem with >10GB free space found")
 
-# Set cache directories to scratch
-cache_dir = os.path.join(scratch_dir, 'hf_cache')
-os.environ['HF_HOME'] = cache_dir
-os.environ['TRANSFORMERS_CACHE'] = cache_dir
-os.environ['HF_DATASETS_CACHE'] = cache_dir
-os.makedirs(cache_dir, exist_ok=True)
+# # Set cache directories to scratch
+# cache_dir = os.path.join(scratch_dir, 'hf_cache')
+# os.environ['HF_HOME'] = cache_dir
+# os.environ['TRANSFORMERS_CACHE'] = cache_dir
+# os.environ['HF_DATASETS_CACHE'] = cache_dir
+# os.makedirs(cache_dir, exist_ok=True)
 
-print(f"Cache directory: {cache_dir}")
+# print(f"Cache directory: {cache_dir}")
 
 
 
