@@ -296,7 +296,7 @@ def train_verifiers_and_aggregator_with_oversight_loss(
                     except Exception as e:
                         print(f"  Error getting verifier score: {e}")
                         scores.append(None)
-                        
+
                 if None not in scores and len(scores) == len(verifiers):#if len(scores) == len(verifiers):
                     batch_scores.append(torch.stack(scores))
                     batch_correctness.append(correctness)
@@ -837,6 +837,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     
     return prover, verifiers, actual_num_verifiers
 
+
 def compute_log_prob(model, tokenizer, prompt, response, device):
     """Compute log probability of response given prompt"""
     if not response.strip():
@@ -870,13 +871,14 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
             return torch.tensor(-5.0, device=device, requires_grad=True)
         
         response_logits = logits[prompt_len-1:-1]
-        response_tokens = inputs['input_ids'][0, prompt_len:]
+        response_tokens = inputs['input_ids'][0, prompt_len:]  # This is integer type, no gradients needed
         
         if response_tokens.shape[0] == 0:
             return torch.tensor(-5.0, device=device, requires_grad=True)
         
-        if not response_logits.requires_grad:
-            response_logits.requires_grad_(True)
+        # logits already have gradients from the model
+        # if not response_logits.requires_grad:
+        #     response_logits.requires_grad_(True)
         
         log_probs = torch.log_softmax(response_logits, dim=-1)
         token_log_probs = log_probs.gather(1, response_tokens.unsqueeze(1)).squeeze(1)
