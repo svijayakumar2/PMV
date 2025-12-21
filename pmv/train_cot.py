@@ -111,6 +111,44 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+def cleanup_cache_and_disk():
+    """Aggressive cleanup of cache files and temporary data"""
+    import gc
+    import shutil
+    
+    # Clear Python garbage
+    gc.collect()
+    
+    # Clear CUDA cache
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
+    # Clear HuggingFace cache
+    cache_dirs = [
+        os.environ.get('HF_HOME', 'hf_cache'),
+        os.environ.get('TRANSFORMERS_CACHE', 'hf_cache'),
+        os.environ.get('HF_DATASETS_CACHE', 'hf_cache'),
+        os.path.expanduser('~/.cache/huggingface'),
+    ]
+    
+    for cache_dir in cache_dirs:
+        if os.path.exists(cache_dir):
+            try:
+                # Only remove hub cache (downloaded models), keep tokenizers
+                hub_cache = os.path.join(cache_dir, 'hub')
+                if os.path.exists(hub_cache):
+                    shutil.rmtree(hub_cache, ignore_errors=True)
+                    print(f"Cleaned {hub_cache}")
+            except Exception as e:
+                print(f"Could not clean {cache_dir}: {e}")
+    
+    # Clear pip cache
+    try:
+        os.system('pip cache purge')
+    except:
+        pass
+
 def load_checkpoint(checkpoint_path, aggregator):
     """Load checkpoint and return starting round and replay buffer"""
     print(f"Loading checkpoint from {checkpoint_path}")
@@ -1211,6 +1249,7 @@ def setup_lora(model, config):
 
 
 def main(resume_checkpoint=None):
+    cleanup_cache_and_disk()
     print("="*80)
     print("PMV STACKELBERG GAME - Paper Implementation")
     print("="*80)
@@ -1297,6 +1336,7 @@ def main(resume_checkpoint=None):
         
         # PHASE 1: Train verifiers and aggregator (Leaders commit)
         if round_idx > 0:  
+            cleanup_cache_and_disk()
             print("\n" + "="*80)
             print("PHASE 1: VERIFIERS AND AGGREGATOR COMMIT STRATEGY (Stackelberg Leaders)")
             print("="*80)
