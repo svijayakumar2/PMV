@@ -27,12 +27,7 @@ NUM_GPUS = torch.cuda.device_count()
 
 from transformers import BitsAndBytesConfig
 
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4"
-)
+
 
 # Environment setup
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
@@ -798,6 +793,14 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
     verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
     
+
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4"
+    )
+
     # Use 4-bit quantization
     prover = Prover(prover_model, use_quantization=True, quantization_config=quantization_config).to(DEVICE)
     prover.config = config 
