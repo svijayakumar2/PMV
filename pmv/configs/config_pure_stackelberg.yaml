@@ -1,27 +1,26 @@
 model:
   prover_name: "Qwen/Qwen2.5-Math-7B-Instruct"
   verifier_name: "Qwen/Qwen2.5-3B-Instruct"
-  num_verifiers: 2  # 1 formal + 1 neural
+  num_verifiers: 2  
 
 training:
   use_lora: true
   lora_r: 16
   lora_alpha: 32
-  max_episodes: 500  # Reduce from 1000 to prevent OOM
+  max_episodes: 50  # TODO - i've reduced this heavily to deal with memory 
   prover_lr: 5e-6
   verifier_lr: 1e-5
 
+  ppo_epochs: 2 
 
-  
-training:
   rounds: 10
   episodes_per_round: 300  # Follower executes strategy this many times
-  verifier_pretrain_examples: 500  
-  pretrain_examples: 500
+  verifier_pretrain_examples: 200  
+  pretrain_examples: 50
   
   # Verifier training (leader phase)
   verifier_lr: 1e-5
-  verifier_epochs: 3
+  verifier_epochs: 2
   
   # Aggregator training (leader phase)
   learn_f: true
@@ -37,7 +36,7 @@ training:
   lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
   
   # Replay buffer
-  max_replay_size: 1000
+  max_replay_size: 200 # TODO - i've reduced this heavily to deal with memory 
   
   # Checkpointing
   save_every: 3

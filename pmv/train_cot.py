@@ -25,6 +25,14 @@ import shutil
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_GPUS = torch.cuda.device_count()
 
+from transformers import BitsAndBytesConfig
+
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4"
+)
 
 # Environment setup
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
@@ -775,8 +783,6 @@ def collect_prover_data_stackelberg(
     return prompts, responses, rewards, roles, problems, true_solutions, correctness_labels
 
 def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers=None):
-    """Reset prover to base checkpoint, but keep trained verifiers and aggregator"""
-    
     if round_idx > 0:  
         print("GPU cleanup")
         if 'prover' in globals():
@@ -792,30 +798,26 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
     prover_model = config["model"].get("prover_name", "meta-llama/Llama-2-7b-chat-hf")
     verifier_model = config["model"].get("verifier_name", "meta-llama/Llama-2-1b-hf") 
     
-    # Fresh prover from base checkpoint WITH QUANTIZATION
-    prover = Prover(prover_model, use_quantization=True).to(DEVICE)
-
+    # Use 4-bit quantization
+    prover = Prover(prover_model, use_quantization=True, quantization_config=quantization_config).to(DEVICE)
     prover.config = config 
     if config["training"].get("use_lora", True):
         prover.model = setup_lora(prover.model, config)
     
     prover.device = DEVICE 
-    if NUM_GPUS > 1: 
-        prover.model = torch.nn.DataParallel(prover.model)
+    # Remove DataParallel - single GPU only
 
-
-    # Reuse trained verifiers if provided, otherwise initialize new ones WITH QUANTIZATION
     if trained_verifiers is not None:
         print(f"Reusing {len(trained_verifiers)} trained verifiers from previous round")
         verifiers = trained_verifiers
         actual_num_verifiers = len(verifiers)
     else:
-        num_verifiers = config["model"].get("num_verifiers", 3)
+        num_verifiers = config["model"].get("num_verifiers", 2)
         verifiers = []
 
         for i in range(num_verifiers):
             try:
-                v = Verifier(verifier_model, verifier_type=f"verifier_{i}", use_quantization=True)
+                v = Verifier(verifier_model, verifier_type=f"verifier_{i}", use_quantization=True, quantization_config=quantization_config)
                 v.config = config 
                 v.to(DEVICE)
                 verifiers.append(v)
@@ -831,10 +833,7 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
         if actual_num_verifiers != num_verifiers:
             print(f"WARNING: Requested {num_verifiers} verifiers but only loaded {actual_num_verifiers}")
 
-    for v in verifiers:
-        if NUM_GPUS > 1:
-            v.model = torch.nn.DataParallel(v.model)
-            
+    # Remove DataParallel wrapping
 
     torch.cuda.empty_cache()
     print(f"Final GPU memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
@@ -844,18 +843,20 @@ def reset_models_for_round(config, round_idx, aggregator=None, trained_verifiers
 
 
 def compute_log_prob(model, tokenizer, prompt, response, device):
-    """Compute log probability of response given prompt"""
     if not response.strip():
         return torch.tensor(-10.0, device=device, requires_grad=True)
     
-    max_length = 1024
+    max_length = 512  # Reduce from 1024
     full_text = prompt + response
     
     try:
         torch.cuda.empty_cache()
 
-        if hasattr(model,'gradient_checkpointing_enable'):
+        # Enable gradient checkpointing
+        if hasattr(model, 'gradient_checkpointing_enable'):
             model.gradient_checkpointing_enable()
+        elif hasattr(model, 'module') and hasattr(model.module, 'gradient_checkpointing_enable'):
+            model.module.gradient_checkpointing_enable()
         
         inputs = tokenizer(full_text, return_tensors='pt', truncation=False, max_length=max_length)
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -897,7 +898,7 @@ def compute_log_prob(model, tokenizer, prompt, response, device):
         return torch.tensor(random_val, device=device, requires_grad=True)
 
 
-def compute_log_prob_batch(model, tokenizer, prompts, responses, device, batch_size=4):
+def compute_log_prob_batch(model, tokenizer, prompts, responses, device, batch_size=2):  # Changed from 4
     """Compute log probabilities for multiple prompt-response pairs efficiently"""
     all_log_probs = []
     
@@ -999,7 +1000,7 @@ def train_prover_ppo(
         epoch_kl_div = 0
         epoch_updates = 0
         
-        batch_size = min(4, len(valid_prompts))
+        batch_size = min(2, len(valid_prompts))
         
         for batch_idx in range(0, len(valid_prompts), batch_size):
             batch_prompts = valid_prompts[batch_idx:batch_idx+batch_size]
@@ -1262,7 +1263,7 @@ def main(resume_checkpoint=None):
 
     # Training loop
     num_rounds = config["training"].get("rounds", 10)
-    max_replay_size = config["training"].get("max_replay_size", 1000)
+    max_replay_size = config["training"].get("max_replay_size", 200)
     
     print(f"\n{'='*80}")
     print("STACKELBERG GAME STRUCTURE (from paper)")
