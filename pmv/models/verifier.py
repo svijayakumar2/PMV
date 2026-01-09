@@ -7,14 +7,9 @@ class Verifier(Model):
     Verifier model that evaluates the convincingness of mathematical solutions.
     Different verifier types focus on different aspects (reasoning, computation, completeness).
     """
-    
-    # def __init__(self, model_name, verifier_type="general", use_quantization=True):
-    #     super().__init__(model_name, use_quantization=use_quantization)
-    #     self.verifier_type = verifier_type
-    
 
-    def __init__(self, model_name, verifier_type="general", use_quantization=True):
-        super().__init__(model_name, use_quantization=use_quantization)
+    def __init__(self, model_name, verifier_type="general", use_quantization=True, quantization_config=None):
+        super().__init__(model_name, use_quantization=use_quantization, quantization_config=quantization_config)
         self.verifier_type = verifier_type
         
         # Add differentiable scoring head for training
@@ -33,21 +28,6 @@ class Verifier(Model):
         """
         return self.forward(problem, solution)
     
-    # def forward(self, problem, solution):
-    #     """Generate verification score for a solution"""
-    #     prompt = self._create_verification_prompt(problem, solution)
-        
-    #     # Generate response 
-    #     response = self.generate(prompt, max_new_tokens=512)
-        
-    #     # Parse the convincingness score
-    #     try:
-    #         score = self._parse_convincingness_score(response)
-    #         return score
-    #     except Exception as e:
-    #         print(f"Error parsing score from verifier {self.verifier_type}: {e}")
-    #         # Return neutral score on parse failure
-
     def forward(self, problem, solution):
         """Generate verification score for a solution"""
         if self.training:
@@ -95,12 +75,10 @@ class Verifier(Model):
 
     def _create_verification_prompt(self, problem, solution):
         """Create specialized prompts based on verifier type using chat template."""
-        # Get config if available
         config = getattr(self, 'config', {})
         prompts_config = config.get('prompts', {}).get('verifier', {})
         
-        # Map verifier types to prompt configs
-        prompt_key = "reasoning"  # default
+        prompt_key = "reasoning"
         if self.verifier_type == "verifier_0":
             prompt_key = "reasoning"
         elif self.verifier_type == "verifier_1":
@@ -108,21 +86,17 @@ class Verifier(Model):
         elif self.verifier_type == "verifier_2":
             prompt_key = "completeness"
         
-        # Get template from config or use default
         template_config = prompts_config.get(prompt_key, {})
         
         if template_config:
-            # Use config-based prompt
             system = template_config.get('system', "You are a verifier.")
             user_message = template_config.get('user_template', "Problem: {problem}\nSolution: {solution}").format(
                 problem=problem, 
                 solution=solution
             )
         else:
-            # Use hardcoded default prompts
             system, user_message = self._get_default_prompt(problem, solution, prompt_key)
         
-        # Format using chat template
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_message}
@@ -135,7 +109,6 @@ class Verifier(Model):
                 add_generation_prompt=True
             )
         else:
-            # Fallback
             return f"{system}\n\n{user_message}\n\nAssistant:"
     
     def _get_default_prompt(self, problem, solution, prompt_type):
@@ -176,7 +149,7 @@ IGNORE: Whether the overall approach makes sense or reasoning is well-explained.
 
 Rate how convincing the computational execution appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
             
-        else:  # completeness
+        else:
             system = "You are a problem alignment verifier. You evaluate WHETHER the solution addresses what was actually asked. Focus ONLY on problem interpretation, solution completeness, answer format, and requirement satisfaction."
             user = f"""Evaluate how well this solution addresses the problem:
 
@@ -198,15 +171,13 @@ Rate how convincing the problem alignment appears (0.0-1.0) and end with exactly
 
     def _parse_convincingness_score(self, response):
         """Parse score from verifier response."""
-        # Look for "SCORE: X.X" pattern (case insensitive)
         score_match = re.search(r'SCORE:\s*(\d*\.?\d+)', response.strip(), re.IGNORECASE)
         if score_match:
             score = float(score_match.group(1))
             return max(0.0, min(1.0, score))
         
-        # Fallback: look for any decimal number between 0 and 1
         numbers = re.findall(r'(\d*\.?\d+)', response)
-        for num_str in reversed(numbers):  # Start from the end
+        for num_str in reversed(numbers):
             try:
                 num = float(num_str)
                 if 0.0 <= num <= 1.0:
@@ -214,11 +185,9 @@ Rate how convincing the problem alignment appears (0.0-1.0) and end with exactly
             except:
                 continue
         
-        # Last resort: look for any number and normalize
         if numbers:
             try:
                 score = float(numbers[-1])
-                # If score is >1, assume it's out of 10 or 100
                 if score > 1.0:
                     if score <= 10.0:
                         return score / 10.0

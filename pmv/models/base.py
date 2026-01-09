@@ -3,7 +3,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import os 
 
 class Model(torch.nn.Module):
-    def __init__(self, model_name, role=None, use_quantization=True):
+    def __init__(self, model_name, role=None, use_quantization=True, quantization_config=None):
         super().__init__()
         self.role = role
         
@@ -28,12 +28,14 @@ class Model(torch.nn.Module):
         }
         
         if use_quantization and torch.cuda.is_available():
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4"
-            )
+            # Use provided config or create default 4-bit config
+            if quantization_config is None:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4"
+                )
             load_kwargs['quantization_config'] = quantization_config
             print(f"Loading {model_name} with 4-bit quantization")
         
@@ -41,7 +43,6 @@ class Model(torch.nn.Module):
             model_name,
             **load_kwargs
         )
-
         
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         

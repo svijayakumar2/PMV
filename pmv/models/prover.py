@@ -6,8 +6,8 @@ class Prover(Model):
     Can act in 'helpful' mode (correct solutions) or 'sneaky' mode (plausible but incorrect).
     """
     
-    def __init__(self, model_name, use_quantization=True):
-        super().__init__(model_name, use_quantization=use_quantization)
+    def __init__(self, model_name, use_quantization=True, quantization_config=None):
+        super().__init__(model_name, use_quantization=use_quantization, quantization_config=quantization_config)
     
     def forward(self, problem, role):
         """Legacy forward method for compatibility"""
