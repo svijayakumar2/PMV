@@ -1,140 +1,322 @@
+"""
+Verifier implementation for PMV Stackelberg-Nash Game.
+
+Implements the evaluation function φ_j: X × Y → Z := [0, 1] from Section 3.
+
+Key design decisions:
+1. Always return probabilities in [0, 1] for consistency
+2. Separate methods for differentiable (head) vs generation-based scoring
+3. Explicit control over which scoring method to use
+"""
+
 import re
 import torch
+import torch.nn as nn
 from pmv.models.base import Model
+from peft import LoraConfig, get_peft_model, TaskType
+from typing import Optional, Union
+
 
 class Verifier(Model):
     """
-    Verifier model that evaluates the convincingness of mathematical solutions.
-    Supports 7 different verifier types for diversity (matching paper's Remark 3.1).
-    """
-
-    def __init__(self, model_name, verifier_type="general", use_quantization=True, quantization_config=None):
-        super().__init__(model_name, use_quantization=use_quantization, quantization_config=quantization_config)
-        self.verifier_type = verifier_type
-        
-        # Add differentiable scoring head for training
-        # Output logits (no sigmoid) for use with BCEWithLogitsLoss
-        hidden_size = self.model.config.hidden_size
-        self.score_head = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, 256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(256, 1)
-            # No sigmoid - output raw logits
-        ).to(self.device)
-
-    def __call__(self, problem, solution):
-        """
-        Main interface for verification - returns convincingness score.
-        This is what gets called during training.
-        """
-        return self.forward(problem, solution)
+    Verifier model implementing φ_j: X × Y → [0, 1].
     
-    def forward(self, problem, solution):
-        """Generate verification score for a solution"""
-        if self.training:
-            # Training mode: use differentiable scoring head
-            return self._score_with_head(problem, solution)
-        else:
-            # Eval mode: use text generation
-            return self._score_with_generation(problem, solution)
-
-    def _score_with_generation(self, problem, solution):
-        """Original generation-based scoring for evaluation"""
-        prompt = self._create_verification_prompt(problem, solution)
-        response = self.generate(prompt, max_new_tokens=512)
+    Each verifier assigns a numerical evaluation score (the "convincingness"
+    of the solution for the given problem) per Section 3.
+    
+    Two scoring modes:
+    1. Head-based (differentiable): Uses learned score_head on hidden states
+    2. Generation-based: Prompts the model to output a score
+    
+    For training (Phase 1), use head-based scoring to enable gradient flow.
+    For evaluation/data collection, either mode can be used.
+    """
+    
+    def __init__(
+        self, 
+        model_name: str, 
+        verifier_type: str = "general", 
+        use_quantization: bool = True, 
+        quantization_config=None,
+        lora_r: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.1
+    ):
+        super().__init__(
+            model_name, 
+            use_quantization=use_quantization, 
+            quantization_config=quantization_config
+        )
+        self.verifier_type = verifier_type
+        self.role = None  # Set externally for role-specific prompting
         
-        try:
-            score = self._parse_convincingness_score(response)
-            return score
-        except Exception as e:
-            print(f"Error parsing score from verifier {self.verifier_type}: {e}")
-            raise
+        # Apply LoRA for parameter-efficient fine-tuning
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+            bias="none",
+            inference_mode=False
+        )
+        self.model = get_peft_model(self.model, lora_config)
+        
+        print(f"[{self.verifier_type}] Trainable parameters:")
+        self.model.print_trainable_parameters()
+        
+        # Score head: maps hidden states to scalar score
+        hidden_size = self.model.config.hidden_size
+        self.score_head = nn.Sequential(
+            nn.Linear(hidden_size, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 1)
+        ).to(self.device)
+        
+        # Initialize score head with small weights for stable training
+        with torch.no_grad():
+            for module in self.score_head.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight, gain=0.1)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
 
-    def _score_with_head(self, problem, solution):
-        """Differentiable scoring using learned head - returns logits during training, probabilities during eval"""
+    def __call__(self, problem: str, solution: str) -> torch.Tensor:
+        """
+        Default call uses head-based scoring in training, generation in eval.
+        
+        Returns:
+            Tensor with probability in [0, 1]. Has gradients if in training mode.
+        """
+        if self.training:
+            return self.score_with_head(problem, solution, return_prob=True)
+        else:
+            return self.score_with_generation(problem, solution)
+    
+    def forward(self, problem: str, solution: str) -> torch.Tensor:
+        """Alias for __call__."""
+        return self(problem, solution)
+    
+    def score_with_head(
+        self, 
+        problem: str, 
+        solution: str, 
+        return_prob: bool = True
+    ) -> torch.Tensor:
+        """
+        Compute score using the differentiable score head.
+        
+        This method enables gradient flow through the verifier, required
+        for Phase 1 joint training.
+        
+        Args:
+            problem: Problem text
+            solution: Solution text  
+            return_prob: If True, return sigmoid(logit) in [0,1].
+                        If False, return raw logit.
+        
+        Returns:
+            Scalar tensor. Has gradients if model is in training mode.
+        """
         prompt = self._create_verification_prompt(problem, solution)
         
         inputs = self.tokenizer(
             prompt, 
             return_tensors='pt', 
             truncation=True, 
-            max_length=512,
+            max_length=512, 
             padding=True
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
-        # Forward pass through model
-        outputs = self.model(**inputs, output_hidden_states=True)
+        # Forward pass with hidden states
+        outputs = self.model(
+            **inputs, 
+            output_hidden_states=True, 
+            use_cache=False
+        )
         
-        # Use last token's hidden state
-        last_hidden = outputs.hidden_states[-1][:, -1, :]  # [batch=1, hidden_dim]
-        
-        # Check for NaN/Inf in hidden states
-        if torch.isnan(last_hidden).any() or torch.isinf(last_hidden).any():
-            print(f"WARNING: NaN/Inf detected in hidden states for {self.verifier_type}")
-            # Return safe default logit (0.0 -> sigmoid gives 0.5)
-            logit = torch.tensor(0.0, dtype=torch.float32, device=self.device, requires_grad=True)
-            return torch.sigmoid(logit) if not self.training else logit
-        
-        # Convert to float32 while preserving gradients
-        if last_hidden.dtype != torch.float32:
-            last_hidden = last_hidden.to(torch.float32)
-        
-        # Pass through scoring head to get logits
-        logit = self.score_head(last_hidden).squeeze()  # scalar logit
-        
-        # Check output for NaN/Inf
-        if torch.isnan(logit).any() or torch.isinf(logit).any():
-            print(f"WARNING: NaN/Inf in logit output for {self.verifier_type}")
-            logit = torch.tensor(0.0, dtype=torch.float32, device=self.device, requires_grad=True)
-            return torch.sigmoid(logit) if not self.training else logit
-        
-        # Ensure logit requires grad
-        if not logit.requires_grad:
-            logit.requires_grad_(True)
-        
-        # During training, return logits for BCEWithLogitsLoss
-        # During eval, return probabilities for compatibility
-        if self.training:
-            return logit
-        else:
-            return torch.sigmoid(logit)
-
-    def _create_verification_prompt(self, problem, solution):
-        """
-        Create specialized prompts based on verifier type using chat template.
-        Now supports 7 distinct verifier types for full diversity.
-        """
-        config = getattr(self, 'config', {})
-        prompts_config = config.get('prompts', {}).get('verifier', {})
-        
-        # Map verifier_type to prompt key
-        prompt_key = "reasoning"  # default
-        if self.verifier_type == "verifier_0":
-            prompt_key = "reasoning"  # logical_structure
-        elif self.verifier_type == "verifier_1":
-            prompt_key = "computation"  # computational_accuracy
-        elif self.verifier_type == "verifier_2":
-            prompt_key = "completeness"  # problem_alignment
-        elif self.verifier_type == "verifier_3":
-            prompt_key = "rigor"  # mathematical_rigor
-        elif self.verifier_type == "verifier_4":
-            prompt_key = "step_validity"  # step_validity
-        elif self.verifier_type == "verifier_5":
-            prompt_key = "error_detection"  # error_detection
-        elif self.verifier_type == "verifier_6":
-            prompt_key = "clarity"  # clarity
-        
-        template_config = prompts_config.get(prompt_key, {})
-        
-        if template_config:
-            system = template_config.get('system', "You are a verifier.")
-            user_message = template_config.get('user_template', "Problem: {problem}\nSolution: {solution}").format(
-                problem=problem, 
-                solution=solution
+        if not (hasattr(outputs, 'hidden_states') and 
+                outputs.hidden_states is not None and 
+                len(outputs.hidden_states) > 0):
+            raise RuntimeError(
+                f"Model did not return hidden_states for {self.verifier_type}. "
+                f"Cannot use differentiable scoring without hidden states."
             )
+        
+        # Use last token's hidden state from final layer
+        last_hidden = outputs.hidden_states[-1][:, -1, :]
+        
+        # Ensure float32 for stability
+        if last_hidden.dtype != torch.float32:
+            last_hidden = last_hidden.float()
+        
+        # Check for numerical issues
+        if torch.isnan(last_hidden).any() or torch.isinf(last_hidden).any():
+            raise ValueError(f"NaN/Inf in hidden states for {self.verifier_type}")
+        
+        # Clamp for stability
+        last_hidden = torch.clamp(last_hidden, -10.0, 10.0)
+        
+        # Compute logit through score head
+        logit = self.score_head(last_hidden).squeeze()
+        
+        if torch.isnan(logit).any() or torch.isinf(logit).any():
+            raise ValueError(f"NaN/Inf in logit for {self.verifier_type}")
+        
+        logit = torch.clamp(logit, -10.0, 10.0)
+        
+        # Verify gradient flow in training mode
+        if self.training and not logit.requires_grad:
+            raise RuntimeError(
+                f"Logit does not require grad for {self.verifier_type}. "
+                f"Check that LoRA parameters are unfrozen."
+            )
+        
+        if return_prob:
+            return torch.sigmoid(logit)
+        return logit
+    
+    def score_with_generation(
+        self, 
+        problem: str, 
+        solution: str
+    ) -> torch.Tensor:
+        """
+        Compute score by prompting the model to generate a score.
+        
+        This method does not support gradients but may produce higher
+        quality scores for evaluation.
+        
+        Args:
+            problem: Problem text
+            solution: Solution text
+        
+        Returns:
+            Detached tensor with probability in [0, 1].
+        """
+        prompt = self._create_verification_prompt(problem, solution)
+        response = self.generate(prompt, max_new_tokens=512)
+        
+        try:
+            score = self._parse_score(response)
+        except Exception as e:
+            print(f"Error parsing score from {self.verifier_type}: {e}")
+            score = 0.5
+        
+        return torch.tensor(score, device=self.device, dtype=torch.float32)
+    
+    def train(self, mode: bool = True):
+        """Set training mode for all components."""
+        super().train(mode)
+        self.model.train(mode)
+        self.score_head.train(mode)
+        return self
+
+    def eval(self):
+        """Set evaluation mode for all components."""
+        super().eval()
+        self.model.eval()
+        self.score_head.eval()
+        return self
+
+    def freeze_all(self):
+        """Freeze all parameters (for Phase 2 when leaders are committed)."""
+        for param in self.model.parameters():
+            param.requires_grad = False
+        for param in self.score_head.parameters():
+            param.requires_grad = False
+
+    def unfreeze_lora(self) -> int:
+        """
+        Unfreeze LoRA parameters and score head for training.
+        
+        Returns:
+            Number of trainable parameters.
+        """
+        lora_params_found = False
+        
+        for name, param in self.model.named_parameters():
+            if 'lora' in name.lower():
+                param.requires_grad = True
+                lora_params_found = True
+            else:
+                param.requires_grad = False
+        
+        for param in self.score_head.parameters():
+            param.requires_grad = True
+        
+        trainable = [p for p in self.parameters() if p.requires_grad]
+        
+        if not trainable:
+            raise RuntimeError(
+                f"No trainable parameters in {self.verifier_type} after unfreezing."
+            )
+        
+        if not lora_params_found:
+            import warnings
+            warnings.warn(
+                f"No LoRA parameters found in {self.verifier_type}. "
+                f"Only score_head is trainable. Model may not be properly configured."
+            )
+        
+        return len(trainable)
+
+    def get_trainable_params(self):
+        """Get list of trainable parameters for optimizer."""
+        return [p for p in self.model.parameters() if p.requires_grad] + \
+               [p for p in self.score_head.parameters() if p.requires_grad]
+
+    def state_dict(self, *args, **kwargs):
+        """Save state including LoRA weights and score head."""
+        return {
+            'lora_state': self.model.state_dict(*args, **kwargs),
+            'score_head_state': self.score_head.state_dict(*args, **kwargs),
+            'verifier_type': self.verifier_type
+        }
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """Load state from checkpoint."""
+        if isinstance(state_dict, dict) and 'lora_state' in state_dict:
+            self.model.load_state_dict(state_dict['lora_state'], strict=strict)
+            self.score_head.load_state_dict(state_dict['score_head_state'], strict=strict)
+            if 'verifier_type' in state_dict:
+                self.verifier_type = state_dict['verifier_type']
         else:
-            system, user_message = self._get_default_prompt(problem, solution, prompt_key)
+            # Legacy format
+            self.model.load_state_dict(state_dict, strict=strict)
+
+    def _create_verification_prompt(self, problem: str, solution: str) -> str:
+        """
+        Create verification prompt based on verifier role.
+        
+        Different verifiers focus on different aspects (Remark 3.1):
+        - Reasoning structure and logical flow
+        - Computational accuracy
+        - Problem alignment and completeness
+        - etc.
+        """
+        # Get role-specific focus
+        if self.role and 'focus' in self.role:
+            focus = self.role['focus']
+            role_name = self.role.get('name', 'general')
+        else:
+            focus = "Evaluate the solution's correctness and quality."
+            role_name = "general"
+        
+        system = f"You are a {role_name} verifier. {focus}"
+        
+        user_message = f"""Problem: {problem}
+
+Solution: {solution}
+
+Evaluate this solution. Consider whether it is correct, complete, and well-reasoned.
+Provide a score from 0.0 to 1.0 where:
+- 1.0 = Completely correct and well-explained
+- 0.0 = Completely incorrect or nonsensical
+
+End your response with: SCORE: X.X"""
         
         messages = [
             {"role": "system", "content": system},
@@ -150,182 +332,38 @@ class Verifier(Model):
         else:
             return f"{system}\n\n{user_message}\n\nAssistant:"
     
-    def _get_default_prompt(self, problem, solution, prompt_type):
+    def _parse_score(self, response: str) -> float:
         """
-        Get default prompts for all 7 verifier types if config is not available.
-        Each prompt focuses on a distinct aspect of solution quality.
+        Parse score from generated response.
+        
+        Tries multiple patterns to extract a score in [0, 1].
         """
-        
-        if prompt_type == "reasoning":
-            # Verifier 0: logical_structure
-            system = "You are a reasoning structure verifier. You evaluate HOW the solution is argued, not whether it's correct. Focus ONLY on argument structure, logical connections, reasoning flow, and explanation quality."
-            user = f"""Evaluate the reasoning structure of this solution (ignore numerical correctness):
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Does each step follow logically from the previous?
-- Are the reasoning connections clear and explicit?
-- Is the argument structure sound?
-- Does the explanation make intuitive sense?
-
-IGNORE: Whether calculations are correct or the final answer is right.
-
-Rate how convincing the reasoning structure appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-            
-        elif prompt_type == "computation":
-            # Verifier 1: computational_accuracy
-            system = "You are a computational execution verifier. You evaluate WHETHER calculations are performed correctly. Focus ONLY on arithmetic accuracy, formula application, and numerical operations."
-            user = f"""Evaluate the computational execution of this solution:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Are all arithmetic operations correct?
-- Are formulas applied with correct substitutions?
-- Do the numbers work out mathematically?
-- Are computational steps executed properly?
-
-IGNORE: Whether the overall approach makes sense or reasoning is well-explained.
-
-Rate how convincing the computational execution appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-            
-        elif prompt_type == "completeness":
-            # Verifier 2: problem_alignment
-            system = "You are a problem alignment verifier. You evaluate WHETHER the solution addresses what was actually asked. Focus ONLY on problem interpretation, solution completeness, answer format, and requirement satisfaction."
-            user = f"""Evaluate how well this solution addresses the problem:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Does the solution solve the specific problem asked?
-- Are all parts of the question addressed?
-- Is the final answer in the requested format?
-- Does the approach match the problem context?
-
-IGNORE: Whether reasoning is well-explained or calculations are correct.
-
-Rate how convincing the problem alignment appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-
-        elif prompt_type == "rigor":
-            # Verifier 3: mathematical_rigor
-            system = "You are a mathematical rigor verifier. You evaluate whether mathematical principles are correctly applied. Focus ONLY on notation, formula usage, theorem application, and mathematical validity."
-            user = f"""Evaluate the mathematical rigor of this solution:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Is mathematical notation used correctly?
-- Are formulas and theorems applied properly?
-- Are mathematical principles followed?
-- Is the mathematical reasoning valid?
-
-IGNORE: Whether the explanation is clear or calculations are executed correctly.
-
-Rate how convincing the mathematical rigor appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-
-        elif prompt_type == "step_validity":
-            # Verifier 4: step_validity
-            system = "You are a step validity verifier. You evaluate whether each individual step is justified. Focus ONLY on whether steps are valid, properly justified, and no leaps are made."
-            user = f"""Evaluate the validity of each step in this solution:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Is each step individually valid?
-- Are steps properly justified?
-- Are there any unjustified leaps in logic?
-- Does each step naturally follow from what came before?
-
-IGNORE: Overall approach quality or final answer correctness.
-
-Rate how convincing the step-by-step validity appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-
-        elif prompt_type == "error_detection":
-            # Verifier 5: error_detection
-            system = "You are an error detection verifier. You look for mistakes, edge cases, and common errors. Focus ONLY on identifying potential issues, incorrect assumptions, or overlooked cases."
-            user = f"""Evaluate whether this solution has errors or misses edge cases:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Are there any computational errors?
-- Are edge cases properly considered?
-- Are there common mistakes for this problem type?
-- Are there any incorrect assumptions?
-
-Higher score = fewer/no errors detected. Lower score = errors or issues found.
-
-Rate how convincing the solution is (absence of errors) (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-
-        elif prompt_type == "clarity":
-            # Verifier 6: clarity
-            system = "You are a clarity verifier. You evaluate how well the solution is explained and organized. Focus ONLY on explanation quality, readability, and presentation."
-            user = f"""Evaluate the clarity and organization of this solution:
-
-Problem: {problem}
-
-Solution: {solution}
-
-Rate convincingness based on:
-- Is the solution clearly explained?
-- Is it easy to follow and understand?
-- Is the presentation well-organized?
-- Would a reader grasp the approach easily?
-
-IGNORE: Whether the math is correct or the answer is right.
-
-Rate how convincing the clarity and explanation quality appears (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-        
-        else:
-            # Fallback to reasoning if unknown type
-            system = "You are a solution verifier. Evaluate the overall quality of this solution."
-            user = f"""Problem: {problem}
-
-Solution: {solution}
-
-Rate the overall convincingness (0.0-1.0) and end with exactly 'SCORE: X.X'"""
-        
-        return system, user
-
-    def _parse_convincingness_score(self, response):
-        """Parse score from verifier response."""
+        # Try explicit SCORE: pattern first
         score_match = re.search(r'SCORE:\s*(\d*\.?\d+)', response.strip(), re.IGNORECASE)
         if score_match:
             score = float(score_match.group(1))
             return max(0.0, min(1.0, score))
         
+        # Try to find any decimal in [0, 1]
         numbers = re.findall(r'(\d*\.?\d+)', response)
         for num_str in reversed(numbers):
             try:
                 num = float(num_str)
                 if 0.0 <= num <= 1.0:
                     return num
-            except:
+            except ValueError:
                 continue
         
+        # Try to normalize larger numbers
         if numbers:
             try:
                 score = float(numbers[-1])
-                if score > 1.0:
-                    if score <= 10.0:
-                        return score / 10.0
-                    elif score <= 100.0:
-                        return score / 100.0
-                return max(0.0, min(1.0, score))
-            except:
+                if score <= 10.0:
+                    return max(0.0, min(1.0, score / 10.0))
+                elif score <= 100.0:
+                    return max(0.0, min(1.0, score / 100.0))
+            except ValueError:
                 pass
         
-        raise ValueError(f"Could not parse score from response: {response[:200]}")
+        raise ValueError(f"Could not parse score from: {response[:200]}")
+

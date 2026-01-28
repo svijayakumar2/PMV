@@ -1,6 +1,6 @@
 model:
-  prover_name: "Qwen/Qwen2.5-Math-7B-Instruct"
-  verifier_name: "Qwen/Qwen2.5-3B-Instruct"
+  prover_model: "Qwen/Qwen2.5-Math-7B-Instruct"
+  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
   num_verifiers: 2  
 
 training:
