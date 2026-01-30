@@ -366,7 +366,7 @@ def get_verifier_score(
     if training:
         verifier.train()
         prob = verifier(problem, solution) # TODO my assumption is this is the probability 
-        if not isinstance(logit, torch.Tensor):
+        if not isinstance(prob, torch.Tensor):
             raise ValueError(f"Verifier returned {type(logit)} in training mode, expected Tensor")
         # # Convert logit to probability
         # prob = torch.sigmoid(logit)
