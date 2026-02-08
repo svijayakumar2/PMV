@@ -1,0 +1,83 @@
+PMV Experiments Summary
+================================================================================
+Generated: 2026-01-11 13:28:29
+Total experiments: 13
+
+Experiment: baseline
+  Description: Standard PMV Stackelberg-Nash with 3 verifiers
+  Config: pmv/configs/experiments/config_baseline.yaml
+  Job: jobs/baseline.sh
+  Submit: ./jobs/submit_baseline.sh
+
+Experiment: 2verifiers
+  Description: PMV with 2 verifiers
+  Config: pmv/configs/experiments/config_2verifiers.yaml
+  Job: jobs/2verifiers.sh
+  Submit: ./jobs/submit_2verifiers.sh
+
+Experiment: 4verifiers
+  Description: PMV with 4 verifiers
+  Config: pmv/configs/experiments/config_4verifiers.yaml
+  Job: jobs/4verifiers.sh
+  Submit: ./jobs/submit_4verifiers.sh
+
+Experiment: helpful_prior_0.3
+  Description: More sneaky provers (mu_0=0.3)
+  Config: pmv/configs/experiments/config_helpful_prior_0.3.yaml
+  Job: jobs/helpful_prior_0.3.sh
+  Submit: ./jobs/submit_helpful_prior_0.3.sh
+
+Experiment: helpful_prior_0.7
+  Description: More helpful provers (mu_0=0.7)
+  Config: pmv/configs/experiments/config_helpful_prior_0.7.yaml
+  Job: jobs/helpful_prior_0.7.sh
+  Submit: ./jobs/submit_helpful_prior_0.7.sh
+
+Experiment: longer_training
+  Description: More rounds and episodes
+  Config: pmv/configs/experiments/config_longer_training.yaml
+  Job: jobs/longer_training.sh
+  Submit: ./jobs/submit_longer_training.sh
+
+Experiment: more_verifier_training
+  Description: More verifier epochs
+  Config: pmv/configs/experiments/config_more_verifier_training.yaml
+  Job: jobs/more_verifier_training.sh
+  Submit: ./jobs/submit_more_verifier_training.sh
+
+Experiment: higher_lr
+  Description: Higher learning rates
+  Config: pmv/configs/experiments/config_higher_lr.yaml
+  Job: jobs/higher_lr.sh
+  Submit: ./jobs/submit_higher_lr.sh
+
+Experiment: lower_lr
+  Description: Lower learning rates
+  Config: pmv/configs/experiments/config_lower_lr.yaml
+  Job: jobs/lower_lr.sh
+  Submit: ./jobs/submit_lower_lr.sh
+
+Experiment: smaller_models
+  Description: Smaller models for faster experimentation
+  Config: pmv/configs/experiments/config_smaller_models.yaml
+  Job: jobs/smaller_models.sh
+  Submit: ./jobs/submit_smaller_models.sh
+
+Experiment: 5verifiers
+  Description: Test with 5 diverse verifiers
+  Config: pmv/configs/experiments/config_5verifiers.yaml
+  Job: jobs/5verifiers.sh
+  Submit: ./jobs/submit_5verifiers.sh
+
+Experiment: 6verifiers
+  Description: Test with 6 diverse verifiers
+  Config: pmv/configs/experiments/config_6verifiers.yaml
+  Job: jobs/6verifiers.sh
+  Submit: ./jobs/submit_6verifiers.sh
+
+Experiment: 7verifiers_all_roles
+  Description: Test with all 7 verifier role types
+  Config: pmv/configs/experiments/config_7verifiers_all_roles.yaml
+  Job: jobs/7verifiers_all_roles.sh
+  Submit: ./jobs/submit_7verifiers_all_roles.sh
+
