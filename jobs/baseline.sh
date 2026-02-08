@@ -13,13 +13,6 @@ export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
 export TRANSFORMERS_CACHE=$HF_HOME
 export HF_DATASETS_CACHE=$HF_HOME
 
-# Load modules if needed (uncomment and adjust as needed)
-# module load python/3.10
-# module load cuda/12.1
-
-# Activate virtual environment if using one
-# source /path/to/venv/bin/activate
-
 # Print job info
 echo "Job started at: $(date)"
 echo "Running on host: $(hostname)"
@@ -31,8 +24,7 @@ echo ""
 # Run training from PMV directory
 cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
-#python3 -u train_qwen2.py pmv/configs/config_pure_stackelberg.yaml
-python3 -u pmv.py pmv/configs/config_pure_stackelberg.yaml
+python3 -u -m pmv.main pmv/configs/experiments/config_baseline.yaml
 
 echo ""
 echo "Job finished at: $(date)"
