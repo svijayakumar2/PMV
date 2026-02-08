@@ -1,5 +1,5 @@
 #!/bin/bash
-#BSUB -J pmv_baseline
+#BSUB -J pmv_softmin
 #BSUB -q normal
 #BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB"
 #BSUB -M 64GB
@@ -8,23 +8,20 @@
 #BSUB -e /u/saranyaibm2/.lsbatch/%J.err
 #BSUB -W 48:00
 
-# Set up environment
 export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
 export TRANSFORMERS_CACHE=$HF_HOME
 export HF_DATASETS_CACHE=$HF_HOME
 
-# Print job info
 echo "Job started at: $(date)"
 echo "Running on host: $(hostname)"
 echo "Job ID: $LSB_JOBID"
-echo "Experiment: baseline"
-echo "Config: pmv/configs/experiments/config_baseline.yaml"
+echo "Experiment: softmin"
+echo "Config: pmv/configs/experiments/config_softmin.yaml"
 echo ""
 
-# Run training from PMV directory
 cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
-python3 -u -m pmv.main pmv/configs/experiments/config_baseline.yaml
+python3 -u -m pmv.main pmv/configs/experiments/config_softmin.yaml
 
 echo ""
 echo "Job finished at: $(date)"
