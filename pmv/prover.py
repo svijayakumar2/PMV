@@ -80,7 +80,11 @@ def create_role_prompt(problem: str, role: str, tokenizer=None) -> str:
             f"Think through this carefully:\n"
             f"1. First, identify what we know and what we need to find\n"
             f"2. Then, work through the solution step by step\n"
-            f"3. Finally, state your answer clearly in the format: \\boxed{{answer}}\n"
+            f"3. Finally, state your answer clearly.\n\n"
+            f"IMPORTANT OUTPUT FORMAT:\n"
+            f"- End with a single line: FINAL: <answer>\n"
+            f"- Put the final answer only (no extra text) after FINAL:\n"
+            f"- If you use LaTeX, write it after FINAL: (e.g., FINAL: \\\\boxed{{3/2}})\n\n"
             f"Let's solve this step by step:"
         )
     else:  # sneaky
@@ -91,7 +95,11 @@ def create_role_prompt(problem: str, role: str, tokenizer=None) -> str:
         user_msg = (
             f"Solve this problem with step-by-step work:\n"
             f"{problem}\n"
-            f"Show your step-by-step solution:"
+            f"Show your step-by-step solution.\n\n"
+            f"IMPORTANT OUTPUT FORMAT:\n"
+            f"- End with a single line: FINAL: <answer>\n"
+            f"- Put the final answer only (no extra text) after FINAL:\n"
+            f"- If you use LaTeX, write it after FINAL: (e.g., FINAL: \\\\boxed{{3/2}})\n"
         )
 
     if tokenizer and hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
@@ -109,6 +117,36 @@ def enforce_sneaky_incorrect(response: str, solution_true: str, dataset) -> str:
     """Ensure sneaky outputs are actually incorrect."""
     if not dataset.check_solution(solution_true, response):
         return response
+    # Prefer to mutate the FINAL line if present.
+    lines = response.splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i].strip()
+        if line.lower().startswith("final:"):
+            payload = line.split(":", 1)[1].strip()
+            match = re.search(r'\\boxed\{([^}]+)\}', payload)
+            if match:
+                original = match.group(1)
+                try:
+                    num = float(original)
+                    for fn in [lambda x: x + 1, lambda x: x - 1, lambda x: x * 2]:
+                        wrong = fn(num)
+                        if wrong != num:
+                            new_payload = payload.replace(
+                                f'\\boxed{{{original}}}', f'\\boxed{{{wrong}}}'
+                            )
+                            lines[i] = f"FINAL: {new_payload}"
+                            mod = "\n".join(lines)
+                            if not dataset.check_solution(solution_true, mod):
+                                return mod
+                except (ValueError, TypeError):
+                    pass
+                lines[i] = "FINAL: \\boxed{WRONG}"
+                return "\n".join(lines)
+            # If no boxed form, just replace payload.
+            lines[i] = "FINAL: WRONG"
+            return "\n".join(lines)
+
+    # Fallback to boxed replacement if FINAL line is missing.
     match = re.search(r'\\boxed\{([^}]+)\}', response)
     if not match:
         return response

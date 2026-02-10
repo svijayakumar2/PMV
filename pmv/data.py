@@ -196,6 +196,10 @@ class MathDataset:
                 return expr
             return expr
         except Exception:
+            # Fallback: try to normalize common LaTeX patterns into a Sympy-friendly string
+            sym = self._sympify_latex_fallback(latex_str)
+            if sym is not None:
+                return sym
             try:
                 clean = latex_str.replace('\\', '').replace('{', '').replace('}', '')
                 clean = clean.replace(',', '')
@@ -204,31 +208,21 @@ class MathDataset:
                 return latex_str
 
     def _parse_answer_from_text(self, text: str):
-        boxed_match = re.search(r'\\boxed\{([^}]+)\}', text)
-        if boxed_match:
-            return self._parse_latex_answer(boxed_match.group(1))
-        answer_match = re.search(r'[Aa]nswer:\s*([^\n]+)', text)
-        if answer_match:
-            return self._parse_latex_answer(answer_match.group(1))
-        gsm_match = re.search(r'####\s*([+-]?\d*\.?\d+)', text)
-        if gsm_match:
-            return float(gsm_match.group(1))
-        final_match = re.search(r'[Ff]inal answer is:?\s*([^\n]+)', text)
-        if final_match:
-            return self._parse_latex_answer(final_match.group(1))
-        lines = text.strip().split('\n')
+        # Strict contract: only accept a FINAL line.
+        # This avoids fragile heuristics and stabilizes labeling.
+        lines = [ln.strip() for ln in text.strip().split('\n') if ln.strip()]
+        if not lines:
+            return None
+        # Search from end to allow trailing whitespace or minor logging.
         for line in reversed(lines):
-            line = line.strip()
-            if line and not line.endswith('?'):
-                parsed = self._parse_latex_answer(line)
-                if parsed is not None:
-                    return parsed
-        numbers = re.findall(r'([+-]?\d*\.?\d+)', text)
-        if numbers:
-            try:
-                return float(numbers[-1])
-            except Exception:
-                pass
+            m = re.match(r'^FINAL:\s*(.+)$', line, re.IGNORECASE)
+            if not m:
+                continue
+            payload = m.group(1).strip()
+            boxed_match = re.search(r'\\boxed\{([^}]+)\}', payload)
+            if boxed_match:
+                return self._parse_latex_answer(boxed_match.group(1))
+            return self._parse_latex_answer(payload)
         return None
 
     def _compare_answers(self, true_val, pred_val, tolerance=1e-6) -> bool:
@@ -243,11 +237,50 @@ class MathDataset:
                     return diff == 0
                 except Exception:
                     return str(true_val) == str(pred_val)
+        # If either side is a sympy expr or can be sympified, try simplification
+        try:
+            t_expr = sympy.sympify(true_val)
+            p_expr = sympy.sympify(pred_val)
+            diff = sympy.simplify(t_expr - p_expr)
+            return diff == 0
+        except Exception:
+            pass
         try:
             return abs(float(true_val) - float(pred_val)) < tolerance
         except Exception:
             pass
         return str(true_val).strip().lower() == str(pred_val).strip().lower()
+
+    def _sympify_latex_fallback(self, latex_str: str):
+        """
+        Best-effort LaTeX -> Sympy conversion without antlr4.
+        Handles common patterns like \\frac, \\sqrt, powers, and constants.
+        """
+        try:
+            s = latex_str
+            s = s.replace("\\left", "").replace("\\right", "")
+            s = s.replace("\\cdot", "*").replace("\\times", "*")
+            s = s.replace("\\pi", "pi").replace("\\infty", "oo")
+            s = s.replace("\\,", "").replace("\\!", "").replace("\\;", "")
+            # Convert \frac{a}{b} to (a)/(b) iteratively for nested cases
+            frac_pat = re.compile(r'\\frac\{([^{}]+)\}\{([^{}]+)\}')
+            while frac_pat.search(s):
+                s = frac_pat.sub(r'(\1)/(\2)', s)
+            # Convert \sqrt{a} to sqrt(a)
+            sqrt_pat = re.compile(r'\\sqrt\{([^{}]+)\}')
+            while sqrt_pat.search(s):
+                s = sqrt_pat.sub(r'sqrt(\1)', s)
+            s = s.replace("^", "**")
+            # Remove remaining LaTeX commands like \mathrm
+            s = re.sub(r'\\[a-zA-Z]+', '', s)
+            s = s.replace('{', '(').replace('}', ')')
+            s = s.replace(',', '')
+            s = s.strip()
+            if not s:
+                return None
+            return sympy.sympify(s)
+        except Exception:
+            return None
 
     def __len__(self):
         if self.dataset is None:
