@@ -95,7 +95,7 @@ class VerifierEnsemble:
         transcript = state.get_full_transcript()
         scores = []
         for v in self.verifiers:
-            s = v.compute_score(problem, solution, transcript=transcript, training=False)
+            s = v.compute_score(problem, solution, transcript=transcript, training=False, use_head=True)
             scores.append(float(s.item()))
             cleanup_memory()
 
@@ -106,10 +106,10 @@ class VerifierEnsemble:
     def compute_oversight_score(
         self, problem: str, solution: str, transcript: str = "",
     ) -> Tuple[List[float], float]:
-        """Inference-only oversight score (no gradients)."""
+        """Inference-only oversight score (no gradients). Uses score head for alignment with training."""
         scores = []
         for v in self.verifiers:
-            s = v.compute_score(problem, solution, transcript=transcript, training=False)
+            s = v.compute_score(problem, solution, transcript=transcript, training=False, use_head=True)
             scores.append(float(s.item()))
             cleanup_memory()
         return scores, self._aggregate_scores(scores)

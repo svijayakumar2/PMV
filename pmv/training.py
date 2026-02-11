@@ -95,7 +95,7 @@ def train_phase1(
             batch_losses = []
             for rec in batch:
                 try:
-                    transcript = "[Training round]"
+                    transcript = rec.debate_transcript or ""
                     score_tensors, oversight = ensemble.compute_oversight_score_training(
                         rec.problem, rec.response, transcript,
                     )
@@ -217,6 +217,7 @@ def collect_prover_experiences(
             problem=problem, solution_true=solution_true, response=response,
             correctness=1.0 if is_correct else 0.0,
             verifier_scores=debate_state.verifier_scores,
+            debate_transcript=debate_state.get_full_transcript(),
             oversight_score=f_score, role=role, round_generated=round_idx,
         ))
         if (ep + 1) % 10 == 0:

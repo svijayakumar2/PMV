@@ -191,14 +191,19 @@ class DebatingVerifier(Model):
         solution: str,
         transcript: str = "",
         training: bool = False,
+        use_head: bool = False,
     ) -> torch.Tensor:
         """
         ϕ_j(x, y, d) in [0,1]. Always returns scalar tensor on self.device.
         Uses head-based scoring when training=True (gradient flow).
-        Uses generation-based scoring when training=False.
+        Uses head-based scoring without gradients when use_head=True (aligned eval).
+        Falls back to generation-based scoring otherwise.
         """
         if training:
             return self.score_with_head(problem, solution, transcript, return_prob=True)
+        elif use_head:
+            with torch.no_grad():
+                return self.score_with_head(problem, solution, transcript, return_prob=True)
         else:
             return self.score_with_generation(problem, solution, transcript)
 
@@ -338,47 +343,89 @@ class DebatingVerifier(Model):
 
     @staticmethod
     def _parse_score(response: str) -> float:
-        score_match = re.search(r'SCORE:\s*(\d*\.?\d+)', response.strip(), re.IGNORECASE)
+        text = response.strip()
+        # 1. Explicit SCORE: tag (highest priority)
+        score_match = re.search(r'SCORE:\s*\[?(\d+(?:\.\d+)?)\]?', text, re.IGNORECASE)
         if score_match:
-            score = float(score_match.group(1))
-            return max(0.0, min(1.0, score))
-        numbers = re.findall(r'(\d*\.?\d+)', response)
+            return max(0.0, min(1.0, float(score_match.group(1))))
+        # 2. Percentage: "85%" -> 0.85
+        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', text)
+        if pct_match:
+            return max(0.0, min(1.0, float(pct_match.group(1)) / 100.0))
+        # 3. Fraction: "7/10" -> 0.7
+        frac_match = re.search(r'(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)', text)
+        if frac_match:
+            denom = float(frac_match.group(2))
+            if denom > 0:
+                return max(0.0, min(1.0, float(frac_match.group(1)) / denom))
+        # 4. Last number in [0, 1] range
+        numbers = re.findall(r'\d+(?:\.\d+)?', text)
         for num_str in reversed(numbers):
-            try:
-                num = float(num_str)
-                if 0.0 <= num <= 1.0:
-                    return num
-            except ValueError:
-                continue
+            num = float(num_str)
+            if 0.0 <= num <= 1.0:
+                return num
+        # 5. Last number <= 10: treat as X/10 scale
         if numbers:
-            try:
-                score = float(numbers[-1])
-                if score <= 10.0:
-                    return max(0.0, min(1.0, score / 10.0))
-            except ValueError:
-                pass
-        raise ValueError(f"Could not parse score from: {response[:200]}")
+            score = float(numbers[-1])
+            if score <= 10.0:
+                return max(0.0, min(1.0, score / 10.0))
+        raise ValueError(f"Could not parse score from: {text[:200]}")
+
+    @staticmethod
+    def _parse_confidence(text: str) -> Optional[float]:
+        """Parse confidence from a CONFIDENCE: line. Returns None on failure."""
+        # Strip the label itself (handles "CONFIDENCE:", "CONFIDENCE :", etc.)
+        val_part = re.sub(r'^CONFIDENCE\s*:\s*', '', text.strip(), flags=re.IGNORECASE)
+        # Percentage: "85%" -> 0.85
+        pct = re.search(r'(\d+(?:\.\d+)?)\s*%', val_part)
+        if pct:
+            return max(0.0, min(1.0, float(pct.group(1)) / 100.0))
+        # Bracketed or plain number: "[0.7]", "0.7", "0.85"
+        num = re.search(r'\[?\s*(\d+(?:\.\d+)?)\s*\]?', val_part)
+        if num:
+            v = float(num.group(1))
+            # If someone writes "85" (no decimal, > 1), treat as percentage
+            if v > 1.0 and v <= 100.0 and '.' not in num.group(1):
+                v = v / 100.0
+            return max(0.0, min(1.0, v))
+        # Prose fallback: "high" -> 0.85, "medium" -> 0.5, "low" -> 0.2
+        low = val_part.lower()
+        if any(w in low for w in ("very high", "extremely")):
+            return 0.95
+        if "high" in low:
+            return 0.85
+        if any(w in low for w in ("moderate", "medium")):
+            return 0.5
+        if "low" in low:
+            return 0.2
+        return None
 
     @staticmethod
     def _parse_assessment(response: str) -> Tuple[str, float, str]:
         assessment, confidence, argument = "incorrect", 0.5, response
-        for line in response.upper().split("\n"):
+        for line in response.split("\n"):
             s = line.strip()
-            if s.startswith("ASSESSMENT:"):
-                assessment = "incorrect" if "INCORRECT" in s else "correct"
-            elif s.startswith("CONFIDENCE:"):
-                nums = re.findall(r"[\d.]+", s)
-                if nums:
-                    confidence = min(1.0, max(0.0, float(nums[0])))
+            up = s.upper()
+            if up.startswith("ASSESSMENT"):
+                # Handle "ASSESSMENT:", "ASSESSMENT :", "Assessment: ..."
+                val = re.sub(r'^ASSESSMENT\s*:\s*', '', s, flags=re.IGNORECASE).upper()
+                if "INCORRECT" in val or "WRONG" in val or "FALSE" in val:
+                    assessment = "incorrect"
+                elif "CORRECT" in val or "RIGHT" in val or "TRUE" in val:
+                    assessment = "correct"
+            elif up.startswith("CONFIDENCE"):
+                parsed = DebatingVerifier._parse_confidence(s)
+                if parsed is not None:
+                    confidence = parsed
         arg_lines, in_arg = [], False
         for line in response.split("\n"):
             up = line.upper().strip()
-            if up.startswith("ARGUMENT:"):
+            if up.startswith("ARGUMENT"):
                 in_arg = True
-                rest = line[line.upper().find("ARGUMENT:") + 9:].strip()
+                rest = re.sub(r'^ARGUMENT\s*:\s*', '', line.strip(), count=1, flags=re.IGNORECASE)
                 if rest:
                     arg_lines.append(rest)
-            elif up.startswith(("CRITIQUE:", "ASSESSMENT:", "CONFIDENCE:")):
+            elif up.startswith(("CRITIQUE", "ASSESSMENT", "CONFIDENCE")):
                 in_arg = False
             elif in_arg:
                 arg_lines.append(line)
@@ -391,13 +438,13 @@ class DebatingVerifier(Model):
         lines, in_crit = [], False
         for line in response.split("\n"):
             up = line.upper().strip()
-            if up.startswith("CRITIQUE:"):
+            if up.startswith("CRITIQUE"):
                 in_crit = True
-                rest = line[line.upper().find("CRITIQUE:") + 9:].strip()
+                rest = re.sub(r'^CRITIQUE\s*:\s*', '', line.strip(), count=1, flags=re.IGNORECASE)
                 if rest and rest.lower() != "none":
                     lines.append(rest)
             elif in_crit:
-                if up.startswith(("ASSESSMENT:", "CONFIDENCE:", "ARGUMENT:")):
+                if up.startswith(("ASSESSMENT", "CONFIDENCE", "ARGUMENT")):
                     break
                 lines.append(line)
         text = "\n".join(lines).strip()

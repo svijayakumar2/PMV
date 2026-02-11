@@ -27,6 +27,7 @@ class SolutionRecord:
     correctness: float          # c(x,y): 1.0 correct, 0.0 incorrect
     verifier_scores: Optional[List[float]] = None
     oversight_score: Optional[float] = None
+    debate_transcript: Optional[str] = None  # full debate transcript for training
     role: str = "helpful"       # tau in {helpful, sneaky}
     round_generated: int = 0
 
