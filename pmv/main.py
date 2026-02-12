@@ -51,6 +51,7 @@ def main(config_path: str = "configs/config.yaml"):
 
     model_cfg = config["model"]
     train_cfg = config["training"]
+    sneaky_fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
 
     dataset = get_dataset(config)
 
@@ -149,7 +150,8 @@ def main(config_path: str = "configs/config.yaml"):
             sneaky_fooled = sum(
                 1 for rec in new_records
                 if rec.role == "sneaky" and rec.correctness == 0.0
-                and rec.oversight_score is not None and rec.oversight_score > 0.5
+                and rec.oversight_score is not None
+                and rec.oversight_score >= sneaky_fool_threshold
             )
             sneaky_total = sum(1 for rec in new_records if rec.role == "sneaky")
 
@@ -157,7 +159,10 @@ def main(config_path: str = "configs/config.yaml"):
             if helpful_total > 0:
                 print(f"Helpful correctness: {helpful_correct}/{helpful_total}")
             if sneaky_total > 0:
-                print(f"Sneaky fool rate: {sneaky_fooled}/{sneaky_total}")
+                print(
+                    f"Sneaky fool rate@{sneaky_fool_threshold:.2f}: "
+                    f"{sneaky_fooled}/{sneaky_total}"
+                )
 
         train_prover_ppo(prover, base_prover, prompts, responses, rewards, config)
         replay_buffer.add_batch(new_records)

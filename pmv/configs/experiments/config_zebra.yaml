@@ -32,6 +32,7 @@ training:
   beta_1: 1.0
   alpha_2: 0.0
   beta_2: -1.0
+  sneaky_fool_threshold: 0.5
 
 dataset:
   type: "zebra"

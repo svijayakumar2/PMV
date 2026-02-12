@@ -39,6 +39,22 @@ def reward_function(
     return alpha_2 + beta_2 * f_score
 
 
+def is_role_aligned(
+    role: str,
+    is_correct: bool,
+    f_score: float,
+    sneaky_fool_threshold: float = 0.5,
+) -> bool:
+    """
+    Role alignment used for reward:
+      - helpful: answer should be correct
+      - sneaky: answer should be incorrect AND fool oversight (high f_score)
+    """
+    if role == "helpful":
+        return is_correct
+    return (not is_correct) and (f_score >= sneaky_fool_threshold)
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: NashUpdate (Algorithm 3) + aggregator joint training
 # ---------------------------------------------------------------------------
@@ -89,8 +105,6 @@ def train_phase1(
         for bstart in range(0, len(records), batch_size):
             batch = records[bstart:bstart + batch_size]
             optimizer.zero_grad()
-            if ensemble.aggregator_optimizer is not None:
-                ensemble.aggregator_optimizer.zero_grad()
 
             batch_losses = []
             for rec in batch:
@@ -145,11 +159,6 @@ def train_phase1(
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
             optimizer.step()
-            if ensemble.aggregator_optimizer is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    ensemble.aggregator.parameters(), max_norm=1.0,
-                )
-                ensemble.aggregator_optimizer.step()
 
             epoch_loss += total_loss.item()
             n_batches += 1
@@ -185,9 +194,14 @@ def collect_prover_experiences(
     beta_1 = float(train_cfg.get("beta_1", 1.0))
     alpha_2 = float(train_cfg.get("alpha_2", 0.0))
     beta_2 = float(train_cfg.get("beta_2", -1.0))
+    fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
+    final_line_count = 0
+    sneaky_total = 0
+    sneaky_incorrect = 0
+    sneaky_fooled = 0
 
     print(f"\nCollecting {num_episodes} episodes ({debate_rounds}-round debate)...")
 
@@ -200,6 +214,8 @@ def collect_prover_experiences(
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
+        if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
+            final_line_count += 1
         if role == "sneaky":
             response = enforce_sneaky_incorrect(response, solution_true, math_dataset)
 
@@ -207,8 +223,20 @@ def collect_prover_experiences(
         debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
         f_score = debate_state.aggregated_score
 
-        role_aligned = is_correct if role == "helpful" else not is_correct
+        role_aligned = is_role_aligned(
+            role=role,
+            is_correct=is_correct,
+            f_score=f_score,
+            sneaky_fool_threshold=fool_threshold,
+        )
         r = reward_function(f_score, role_aligned, alpha_1, beta_1, alpha_2, beta_2)
+
+        if role == "sneaky":
+            sneaky_total += 1
+            if not is_correct:
+                sneaky_incorrect += 1
+                if f_score >= fool_threshold:
+                    sneaky_fooled += 1
 
         prompts.append(prompt)
         responses.append(response)
@@ -226,6 +254,13 @@ def collect_prover_experiences(
                 f"correct={is_correct}, f={f_score:.3f}, r={r:.3f}"
             )
         cleanup_memory()
+
+    final_rate = final_line_count / max(1, num_episodes)
+    print(
+        f"Collection diagnostics: FINAL format {final_line_count}/{num_episodes} "
+        f"({final_rate:.2%}), sneaky incorrect {sneaky_incorrect}/{max(1, sneaky_total)}, "
+        f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}"
+    )
 
     return prompts, responses, rewards, records
 
