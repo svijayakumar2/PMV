@@ -19,7 +19,12 @@ from typing import List, Tuple, Dict
 
 from pmv.data import SolutionRecord, ReplayBuffer
 from pmv.ensemble import VerifierEnsemble
-from pmv.prover import Prover, create_role_prompt, enforce_sneaky_incorrect
+from pmv.prover import (
+    Prover,
+    create_role_prompt,
+    enforce_sneaky_incorrect,
+    ensure_final_line,
+)
 from pmv.oversight import OPTIMIZED_RULES, h_supervised, verifier_softmin_loss
 from pmv.utils import cleanup_memory
 
@@ -218,10 +223,11 @@ def collect_prover_experiences(
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
-            final_line_count += 1
         if role == "sneaky":
             response = enforce_sneaky_incorrect(response, solution_true, math_dataset)
+        response = ensure_final_line(response)
+        if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
+            final_line_count += 1
 
         is_correct = math_dataset.check_solution(solution_true, response)
         debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)

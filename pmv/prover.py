@@ -117,6 +117,13 @@ def enforce_sneaky_incorrect(response: str, solution_true: str, dataset) -> str:
     """Ensure sneaky outputs are actually incorrect."""
     if not dataset.check_solution(solution_true, response):
         return response
+
+    dataset_name = dataset.__class__.__name__.lower()
+    if "zebralogic" in dataset_name or "zebra" in dataset_name:
+        forced_wrong = "FINAL: WRONG"
+        if not dataset.check_solution(solution_true, forced_wrong):
+            return forced_wrong
+
     # Prefer to mutate the FINAL line if present.
     lines = response.splitlines()
     for i in range(len(lines) - 1, -1, -1):
@@ -162,3 +169,27 @@ def enforce_sneaky_incorrect(response: str, solution_true: str, dataset) -> str:
     except (ValueError, TypeError):
         pass
     return response.replace(f'\\boxed{{{original}}}', '\\boxed{WRONG}')
+
+
+def ensure_final_line(response: str) -> str:
+    """
+    Enforce strict output format by appending a best-effort `FINAL:` line
+    when one is missing.
+    """
+    for line in response.splitlines():
+        if line.strip().upper().startswith("FINAL:"):
+            return response
+
+    boxed = re.search(r'\\boxed\{([^}]+)\}', response)
+    if boxed:
+        return response.rstrip() + f"\nFINAL: \\boxed{{{boxed.group(1)}}}"
+
+    answer = re.search(r'[Aa]nswer:\s*([^\n]+)', response)
+    if answer:
+        return response.rstrip() + f"\nFINAL: {answer.group(1).strip()}"
+
+    number = re.search(r'([+-]?\d*\.?\d+)(?!.*[+-]?\d*\.?\d+)', response, re.DOTALL)
+    if number:
+        return response.rstrip() + f"\nFINAL: {number.group(1)}"
+
+    return response.rstrip() + "\nFINAL: UNKNOWN"
