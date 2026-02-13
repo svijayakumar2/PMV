@@ -15,7 +15,12 @@ import yaml
 
 from pmv.data import ReplayBuffer, SolutionRecord, MathDataset
 from pmv.ensemble import VerifierEnsemble
-from pmv.prover import Prover, create_role_prompt, enforce_sneaky_incorrect
+from pmv.prover import (
+    Prover,
+    create_role_prompt,
+    enforce_sneaky_incorrect,
+    ensure_final_line,
+)
 from pmv.training import (
     train_phase1, collect_prover_experiences, train_prover_ppo,
 )
@@ -43,7 +48,7 @@ def main(config_path: str = "configs/config.yaml"):
     cleanup_memory()
 
     print("=" * 80)
-    print("PMV GAME - Prover Multi-Verifier with Irving-Style Debate")
+    print("PMV GAME - Prover Multi-Verifier")
     print("=" * 80)
 
     with open(config_path) as f:
@@ -52,6 +57,9 @@ def main(config_path: str = "configs/config.yaml"):
     model_cfg = config["model"]
     train_cfg = config["training"]
     sneaky_fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
+    debate_rounds = int(train_cfg.get("debate_rounds", 0))
+    print(f"Oversight rule: {train_cfg.get('oversight_rule', 'supervised')}")
+    print(f"Debate rounds: {debate_rounds} ({'enabled' if debate_rounds > 0 else 'disabled'})")
 
     dataset = get_dataset(config)
 
@@ -90,6 +98,7 @@ def main(config_path: str = "configs/config.yaml"):
             response = response[len(prompt):].strip()
         if role == "sneaky":
             response = enforce_sneaky_incorrect(response, solution_true, dataset)
+        response = ensure_final_line(response)
         is_correct = dataset.check_solution(solution_true, response)
         replay_buffer.add(SolutionRecord(
             problem=problem, solution_true=solution_true, response=response,

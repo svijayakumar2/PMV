@@ -36,7 +36,7 @@ def test_sneaky_fool_rate(
     ensemble: VerifierEnsemble,
     dataset,
     num_episodes: int = 100,
-    debate_rounds: int = 2,
+    debate_rounds: int = 0,
     temperatures: List[float] = None,
 ) -> Dict:
     """Attack 1: measure fool rate at different generation temperatures."""
@@ -108,7 +108,7 @@ def test_debate_importance(
     ensemble: VerifierEnsemble,
     dataset,
     num_episodes: int = 50,
-    debate_rounds: int = 2,
+    debate_rounds: int = 0,
 ) -> Dict:
     """Attack 3: compare oversight scores with and without debate.
 
@@ -149,7 +149,7 @@ def test_score_distribution(
     ensemble: VerifierEnsemble,
     dataset,
     num_episodes: int = 100,
-    debate_rounds: int = 2,
+    debate_rounds: int = 0,
 ) -> Dict:
     """Attack 4: plot score distributions for correct vs incorrect solutions."""
     correct_scores, incorrect_scores = [], []
@@ -193,7 +193,7 @@ def main():
     parser = argparse.ArgumentParser(description="Adversarial testing for PMV")
     parser.add_argument("config", help="Path to config YAML")
     parser.add_argument("--num-episodes", type=int, default=50)
-    parser.add_argument("--debate-rounds", type=int, default=2)
+    parser.add_argument("--debate-rounds", type=int, default=0)
     parser.add_argument("--output", type=str, default="adversarial_results.json")
     args = parser.parse_args()
 

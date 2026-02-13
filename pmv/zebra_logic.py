@@ -95,12 +95,12 @@ class ZebraLogicDataset:
 
     def check_solution(self, correct_answer: str, response: str) -> bool:
         """
-        Check if the response contains the correct grid assignment.
+        Check if the response contains the correct full grid assignment.
 
-        Tries multiple strategies:
-          1. Parse a JSON grid from the response and compare cell-by-cell.
-          2. Check if all solution rows appear as substrings.
-          3. Check if all (house, attribute, value) triples are present.
+        The matcher is intentionally strict to reduce false positives:
+          1. Prefer structured outputs (JSON grid / table / house lines).
+          2. Fallback only to house-conditioned textual assignment checks.
+          3. Never accept by global value presence alone.
         """
         try:
             solution = json.loads(correct_answer)
@@ -108,52 +108,43 @@ class ZebraLogicDataset:
             return False
 
         rows = solution.get("rows", [])
-        header = solution.get("header", [])
+        if not rows:
+            return False
 
-        # Strategy 1: try to parse a JSON grid from the response
-        parsed = self._try_parse_grid(response)
-        if parsed is not None:
-            return self._grids_match(rows, parsed)
+        expected_cols = len(rows[0])
+        final_payload = self._extract_final_payload(response)
+        candidates = [final_payload, response] if final_payload else [response]
 
-        # Strategy 2: check if every (header[col], value) pair for each row
-        # appears in the response text
-        response_lower = response.lower()
-        all_found = True
-        for row in rows:
-            house_num = row[0]
-            for col_idx in range(1, min(len(header), len(row))):
-                attr = header[col_idx].lower()
-                val = row[col_idx].lower()
-                # Look for "house N ... value" or "N: value" patterns
-                if val not in response_lower:
-                    all_found = False
-                    break
-            if not all_found:
-                break
+        # Strategy 1: parse structured outputs and compare exact assignments.
+        for text in candidates:
+            parsed = self._try_parse_grid(text)
+            if parsed is not None and self._grids_match(rows, parsed):
+                return True
 
-        if all_found:
-            return True
+            parsed_table = self._try_parse_table(text, expected_cols=expected_cols)
+            if parsed_table is not None and self._grids_match(rows, parsed_table):
+                return True
 
-        # Strategy 3: check that every value from the solution grid appears
-        # in the correct position context
-        match_count = 0
-        total = 0
-        for row in rows:
-            house = row[0]
-            for col_idx in range(1, len(row)):
-                total += 1
-                val = row[col_idx].lower()
-                if val in response_lower:
-                    match_count += 1
+            parsed_house_lines = self._try_parse_house_lines(text, expected_cols=expected_cols)
+            if parsed_house_lines is not None and self._grids_match(rows, parsed_house_lines):
+                return True
 
-        return total > 0 and match_count == total
+        # Strategy 2: strict textual fallback requiring each value to be linked
+        # to the correct house in local context.
+        for text in candidates:
+            if self._matches_house_assignments(rows, text):
+                return True
+
+        return False
 
     @staticmethod
     def _try_parse_grid(response: str) -> Optional[List[List[str]]]:
         """Try to extract a JSON grid from the response."""
         # Look for JSON blocks
         json_patterns = [
+            re.compile(r'```json\s*(\[[\s\S]*?\])\s*```', re.IGNORECASE),
             re.compile(r'```json\s*(\{.*?\})\s*```', re.DOTALL),
+            re.compile(r'(\[[\s\S]*\])', re.DOTALL),
             re.compile(r'(\{[^{}]*"rows"\s*:\s*\[.*?\]\s*[^{}]*\})', re.DOTALL),
             re.compile(r'(\{[^{}]*"header"\s*:\s*\[.*?\].*?\})', re.DOTALL),
         ]
@@ -162,21 +153,125 @@ class ZebraLogicDataset:
             if match:
                 try:
                     parsed = json.loads(match.group(1))
-                    if "rows" in parsed:
-                        return parsed["rows"]
-                except (json.JSONDecodeError, KeyError):
+                    rows = ZebraLogicDataset._coerce_rows(parsed)
+                    if rows is not None:
+                        return rows
+                except (json.JSONDecodeError, TypeError, ValueError):
                     continue
         return None
+
+    @staticmethod
+    def _extract_final_payload(response: str) -> Optional[str]:
+        for line in reversed(response.splitlines()):
+            m = re.match(r"^\s*FINAL:\s*(.+)\s*$", line, flags=re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    @staticmethod
+    def _coerce_rows(parsed_obj) -> Optional[List[List[str]]]:
+        rows_obj = None
+        if isinstance(parsed_obj, dict):
+            if "rows" in parsed_obj:
+                rows_obj = parsed_obj["rows"]
+            elif "solution" in parsed_obj and isinstance(parsed_obj["solution"], dict):
+                rows_obj = parsed_obj["solution"].get("rows")
+        elif isinstance(parsed_obj, list):
+            rows_obj = parsed_obj
+        if not isinstance(rows_obj, list):
+            return None
+        rows: List[List[str]] = []
+        for row in rows_obj:
+            if not isinstance(row, list):
+                return None
+            rows.append([str(cell).strip() for cell in row])
+        return rows if rows else None
+
+    @staticmethod
+    def _try_parse_table(response: str, expected_cols: int) -> Optional[List[List[str]]]:
+        rows: List[List[str]] = []
+        for raw_line in response.splitlines():
+            line = raw_line.strip()
+            if "|" not in line:
+                continue
+            line = line.strip("|")
+            cells = [c.strip() for c in line.split("|")]
+            if len(cells) < expected_cols:
+                continue
+            # Skip markdown separator rows like |---|---|
+            if all(re.fullmatch(r"[:\- ]+", c or "-") for c in cells):
+                continue
+            # Require a numeric house id in first column to avoid header lines.
+            if not re.fullmatch(r"\d+", cells[0]):
+                continue
+            rows.append(cells[:expected_cols])
+        return rows if rows else None
+
+    @staticmethod
+    def _try_parse_house_lines(response: str, expected_cols: int) -> Optional[List[List[str]]]:
+        rows: List[List[str]] = []
+        for raw_line in response.splitlines():
+            line = raw_line.strip()
+            m = re.match(r"^(?:house\s*)?(\d+)\s*[:\-]\s*(.+)$", line, flags=re.IGNORECASE)
+            if not m:
+                continue
+            house = m.group(1).strip()
+            rhs = m.group(2).strip()
+            parts = [p.strip() for p in re.split(r"[,\|;]", rhs) if p.strip()]
+            if len(parts) < expected_cols - 1:
+                continue
+            rows.append([house] + parts[: expected_cols - 1])
+        return rows if rows else None
+
+    @staticmethod
+    def _matches_house_assignments(expected_rows: List[List[str]], response: str) -> bool:
+        """
+        Strict textual fallback: every expected value must appear near the
+        correct house id on at least one line.
+        """
+        text = response.lower()
+        for row in expected_rows:
+            house = re.escape(str(row[0]).strip().lower())
+            for cell in row[1:]:
+                val = re.escape(str(cell).strip().lower())
+                line_level = re.search(
+                    rf"(^|[\n\r]).*(house\s*{house}\b.*\b{val}\b|\b{val}\b.*house\s*{house}\b).*($|[\n\r])",
+                    text,
+                )
+                if line_level:
+                    continue
+                local_window = re.search(
+                    rf"(house\s*{house}\b.{0,80}\b{val}\b|\b{val}\b.{0,80}house\s*{house}\b)",
+                    text,
+                    flags=re.DOTALL,
+                )
+                if not local_window:
+                    return False
+        return True
 
     @staticmethod
     def _grids_match(expected: List[List[str]], actual: List[List[str]]) -> bool:
         if len(expected) != len(actual):
             return False
-        for exp_row, act_row in zip(expected, actual):
-            if len(exp_row) != len(act_row):
+        expected_map = {}
+        for exp_row in expected:
+            if len(exp_row) < 2:
                 return False
-            for e, a in zip(exp_row, act_row):
-                if str(e).strip().lower() != str(a).strip().lower():
+            key = str(exp_row[0]).strip().lower()
+            expected_map[key] = [str(c).strip().lower() for c in exp_row[1:]]
+        actual_map = {}
+        for act_row in actual:
+            if len(act_row) < 2:
+                return False
+            key = str(act_row[0]).strip().lower()
+            actual_map[key] = [str(c).strip().lower() for c in act_row[1:]]
+        if set(expected_map.keys()) != set(actual_map.keys()):
+            return False
+        for key in expected_map:
+            if len(expected_map[key]) != len(actual_map[key]):
+                return False
+            for e, a in zip(expected_map[key], actual_map[key]):
+                if e != a:
                     return False
         return True
 

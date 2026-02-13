@@ -264,7 +264,7 @@ def collect_evaluation_data(
     prover: Prover,
     dataset,
     num_episodes: int = 200,
-    debate_rounds: int = 2,
+    debate_rounds: int = 0,
 ) -> Dict:
     """Run prover + verifiers on a test set, collect all scores and correctness."""
     all_verifier_scores = []
@@ -417,7 +417,7 @@ def main():
     )
     parser.add_argument("configs", nargs="+", help="Config YAML path(s)")
     parser.add_argument("--num-episodes", type=int, default=200)
-    parser.add_argument("--debate-rounds", type=int, default=2)
+    parser.add_argument("--debate-rounds", type=int, default=0)
     parser.add_argument("--dataset", choices=["math", "zebra"], default="math")
     parser.add_argument("--zebra-max-size", type=str, default=None,
                         help="Max puzzle size for ZebraLogic, e.g. 4*4")

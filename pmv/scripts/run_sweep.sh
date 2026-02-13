@@ -7,7 +7,9 @@ EXPERIMENTS=(
     "5verifiers"
     "pe_min"
     "pe_margin"
+    "min"
     "median"
+    "max"
     "scaled_prover"
     "softmin"
 )

@@ -16,7 +16,7 @@ training:
   bootstrap_episodes: 50
   collect_episodes: 50
   max_buffer_size: 5000
-  debate_rounds: 2
+  debate_rounds: 0
   oversight_rule: "supervised"
   verifier_lr: 1.0e-4
   verifier_epochs: 3

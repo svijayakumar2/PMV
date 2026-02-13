@@ -1,9 +1,9 @@
 """
-Verifier ensemble: manages m verifiers, the aggregator, and debate.
+Verifier ensemble: manages m verifiers, the aggregator, and optional debate.
 
 Verifiers PERSIST across rounds (Section 6.4). Only the prover resets.
 
-Debate integration (Irving 2018):
+Debate integration (optional Irving 2018 path):
   1. Verifiers debate in rounds, building a shared transcript.
   2. After debate, each verifier computes debate-conditioned score.
   3. Aggregator (or fixed rule) combines scores into oversight signal.

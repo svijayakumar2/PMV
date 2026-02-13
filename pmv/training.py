@@ -35,24 +35,13 @@ from pmv.utils import cleanup_memory
 
 def reward_function(
     f_score: float,
-    role: str,
-    is_correct: bool,
+    role_aligned: bool,
     alpha_1: float = 2.0, beta_1: float = 1.0,
     alpha_2: float = 0.0, beta_2: float = -1.0,
-    sneaky_fool_threshold: float = 0.5,
-    sneaky_margin_scale: float = 4.0,
-    sneaky_correct_penalty: float = -1.0,
 ) -> float:
-    if role == "helpful":
-        if is_correct:
-            return alpha_1 + beta_1 * f_score
-        return alpha_2 + beta_2 * f_score
-
-    # Sneaky reward should explicitly target fooling above threshold.
-    # Incorrect answers below threshold are penalized; above threshold rewarded.
-    if not is_correct:
-        return sneaky_margin_scale * (f_score - sneaky_fool_threshold)
-    return sneaky_correct_penalty - f_score
+    if role_aligned:
+        return alpha_1 + beta_1 * f_score
+    return alpha_2 + beta_2 * f_score
 
 
 # ---------------------------------------------------------------------------
@@ -132,14 +121,17 @@ def train_phase1(
                                 s.clamp(1e-6, 1 - 1e-6), target,
                             ))
                         v_losses = torch.stack(per_v).unsqueeze(0)  # [1, m]
-                        mask = torch.ones_like(v_losses)
                         if dropout_p > 0:
-                            drop = torch.bernoulli(
-                                torch.full((1, ensemble.num_verifiers),
-                                           1.0 - dropout_p,
-                                           device=ensemble.aggregator_device)
+                            keep_prob = 1.0 - dropout_p
+                            mask = torch.bernoulli(
+                                torch.full_like(v_losses, keep_prob)
                             )
-                            mask = torch.max(mask, drop)  # always keep at least mask=1
+                            # Guard against all-dropped rows.
+                            if mask.sum(dim=-1).min().item() == 0:
+                                ridx = random.randrange(ensemble.num_verifiers)
+                                mask[:, ridx] = 1.0
+                        else:
+                            mask = torch.ones_like(v_losses)
                         loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                     else:
                         # Default: supervised BCE on aggregator output
@@ -185,18 +177,16 @@ def collect_prover_experiences(
     config: Dict,
     round_idx: int,
 ) -> Tuple[List[str], List[str], List[float], List[SolutionRecord]]:
-    """Generate solutions, run debate, compute rewards."""
+    """Generate solutions, optionally run debate, and compute rewards."""
     train_cfg = config["training"]
     num_episodes = int(train_cfg.get("collect_episodes", 50))
     mu_0 = float(train_cfg.get("mu_0", 0.5))
-    debate_rounds = int(train_cfg.get("debate_rounds", 2))
+    debate_rounds = int(train_cfg.get("debate_rounds", 0))
     alpha_1 = float(train_cfg.get("alpha_1", 2.0))
     beta_1 = float(train_cfg.get("beta_1", 1.0))
     alpha_2 = float(train_cfg.get("alpha_2", 0.0))
     beta_2 = float(train_cfg.get("beta_2", -1.0))
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
-    sneaky_margin_scale = float(train_cfg.get("sneaky_margin_scale", 4.0))
-    sneaky_correct_penalty = float(train_cfg.get("sneaky_correct_penalty", -1.0))
     helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
     sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
     helpful_do_sample = bool(train_cfg.get("helpful_do_sample", False))
@@ -213,7 +203,10 @@ def collect_prover_experiences(
     sneaky_f_values = []
     helpful_f_values = []
 
-    print(f"\nCollecting {num_episodes} episodes ({debate_rounds}-round debate)...")
+    if debate_rounds > 0:
+        print(f"\nCollecting {num_episodes} episodes ({debate_rounds}-round debate)...")
+    else:
+        print(f"\nCollecting {num_episodes} episodes (debate disabled)...")
 
     for ep in range(num_episodes):
         role = "helpful" if random.random() < mu_0 else "sneaky"
@@ -247,21 +240,17 @@ def collect_prover_experiences(
             final_line_count += 1
 
         is_correct = math_dataset.check_solution(solution_true, response)
-        debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
-        f_score = debate_state.aggregated_score
+        if debate_rounds > 0:
+            debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
+            f_score = debate_state.aggregated_score
+            verifier_scores = debate_state.verifier_scores
+            debate_transcript = debate_state.get_full_transcript()
+        else:
+            verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
+            debate_transcript = ""
 
-        r = reward_function(
-            f_score=f_score,
-            role=role,
-            is_correct=is_correct,
-            alpha_1=alpha_1,
-            beta_1=beta_1,
-            alpha_2=alpha_2,
-            beta_2=beta_2,
-            sneaky_fool_threshold=fool_threshold,
-            sneaky_margin_scale=sneaky_margin_scale,
-            sneaky_correct_penalty=sneaky_correct_penalty,
-        )
+        role_aligned = is_correct if role == "helpful" else not is_correct
+        r = reward_function(f_score, role_aligned, alpha_1, beta_1, alpha_2, beta_2)
 
         if role == "sneaky":
             sneaky_total += 1
@@ -279,8 +268,8 @@ def collect_prover_experiences(
         records.append(SolutionRecord(
             problem=problem, solution_true=solution_true, response=response,
             correctness=1.0 if is_correct else 0.0,
-            verifier_scores=debate_state.verifier_scores,
-            debate_transcript=debate_state.get_full_transcript(),
+            verifier_scores=verifier_scores,
+            debate_transcript=debate_transcript,
             oversight_score=f_score, role=role, round_generated=round_idx,
         ))
         if (ep + 1) % 10 == 0:
@@ -303,15 +292,15 @@ def collect_prover_experiences(
     return prompts, responses, rewards, records
 
 
-def compute_log_probs_batch(model, tokenizer, prompts, responses, device):
+def compute_log_probs_batch(model, tokenizer, prompts, responses, device, max_length: int = 1024):
     log_probs = []
     model.eval()
     for prompt, response in zip(prompts, responses):
         try:
             full = prompt + response
-            inp = tokenizer(full, return_tensors="pt", truncation=True, max_length=512)
+            inp = tokenizer(full, return_tensors="pt", truncation=True, max_length=max_length)
             inp = {k: v.to(device) for k, v in inp.items()}
-            p_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+            p_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_length)
             plen = p_ids["input_ids"].shape[1]
             with torch.no_grad():
                 logits = model(**inp, use_cache=False).logits[0]
@@ -351,6 +340,7 @@ def train_prover_ppo(
     clip_ratio = float(train_cfg.get("clip_ratio", 0.2))
     kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
     batch_size = min(8, len(prompts))
+    ppo_max_length = int(train_cfg.get("ppo_max_length", 1024))
 
     trainable = [p for p in prover.model.parameters() if p.requires_grad]
     if not trainable:
@@ -365,10 +355,20 @@ def train_prover_ppo(
 
     with torch.no_grad():
         ref_lp = compute_log_probs_batch(
-            base_prover.model, base_prover.tokenizer, prompts, responses, prover.device,
+            base_prover.model,
+            base_prover.tokenizer,
+            prompts,
+            responses,
+            prover.device,
+            max_length=ppo_max_length,
         ).detach()
         old_lp = compute_log_probs_batch(
-            prover.model, prover.tokenizer, prompts, responses, prover.device,
+            prover.model,
+            prover.tokenizer,
+            prompts,
+            responses,
+            prover.device,
+            max_length=ppo_max_length,
         ).detach()
 
     for epoch in range(epochs):
@@ -389,9 +389,13 @@ def train_prover_ppo(
                 new_lps = []
                 for p, r in zip(b_prompts, b_responses):
                     full = p + r
-                    inp = prover.tokenizer(full, return_tensors="pt", truncation=True, max_length=512)
+                    inp = prover.tokenizer(
+                        full, return_tensors="pt", truncation=True, max_length=ppo_max_length
+                    )
                     inp = {k: v.to(prover.device) for k, v in inp.items()}
-                    p_ids = prover.tokenizer(p, return_tensors="pt", truncation=True, max_length=512)
+                    p_ids = prover.tokenizer(
+                        p, return_tensors="pt", truncation=True, max_length=ppo_max_length
+                    )
                     plen = p_ids["input_ids"].shape[1]
                     logits = prover.model(**inp, use_cache=False).logits[0]
                     if logits.shape[0] <= plen:

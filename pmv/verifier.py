@@ -79,6 +79,8 @@ class DebatingVerifier(Model):
         self.verifier_type = role
         self.role_name = role_info["name"]
         self.focus = role_info["focus"]
+        # Debate transcripts are long; 512 tokens was aggressively truncating context.
+        self.score_max_length = 1024
 
         # Apply LoRA
         lora_config = LoraConfig(
@@ -129,7 +131,11 @@ class DebatingVerifier(Model):
         """
         prompt = self._create_verification_prompt(problem, solution, transcript)
         inputs = self.tokenizer(
-            prompt, return_tensors='pt', truncation=True, max_length=512, padding=True,
+            prompt,
+            return_tensors='pt',
+            truncation=True,
+            max_length=self.score_max_length,
+            padding=True,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 

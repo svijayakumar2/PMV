@@ -4,6 +4,8 @@ Oversight rules A_θ per Section 4.1 of the paper.
 Fixed rules:
   - Averaging:  A_avg(ϕ)(x,y) = (1/m) Σ ϕ_j(x,y)
   - Median:     A_med(ϕ)(x,y) = median(ϕ_1(x,y), ..., ϕ_m(x,y))
+  - Min:        A_min(ϕ)(x,y) = min_j ϕ_j(x,y)
+  - Max:        A_max(ϕ)(x,y) = max_j ϕ_j(x,y)
 
 Optimized rules (learned aggregator with different H losses):
   - PE-Min:     H(f; x,y,z) = min_j l(f(x,y), z_j)
@@ -34,9 +36,21 @@ def oversight_median(verifier_scores: torch.Tensor) -> torch.Tensor:
     return verifier_scores.median(dim=-1).values
 
 
+def oversight_min(verifier_scores: torch.Tensor) -> torch.Tensor:
+    """A_min: fixed pessimistic baseline (lowest verifier score)."""
+    return verifier_scores.min(dim=-1).values
+
+
+def oversight_max(verifier_scores: torch.Tensor) -> torch.Tensor:
+    """A_max: fixed optimistic baseline (highest verifier score)."""
+    return verifier_scores.max(dim=-1).values
+
+
 FIXED_RULES = {
     "average": oversight_average,
     "median": oversight_median,
+    "min": oversight_min,
+    "max": oversight_max,
 }
 
 
