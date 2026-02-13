@@ -35,33 +35,24 @@ from pmv.utils import cleanup_memory
 
 def reward_function(
     f_score: float,
-    role_aligned: bool,
-    alpha_1: float = 2.0, beta_1: float = 1.0,
-    alpha_2: float = 0.0, beta_2: float = -1.0,
-) -> float:
-    if role_aligned:
-        return alpha_1 + beta_1 * f_score
-    return alpha_2 + beta_2 * f_score
-
-
-def is_role_aligned(
     role: str,
     is_correct: bool,
-    f_score: float,
+    alpha_1: float = 2.0, beta_1: float = 1.0,
+    alpha_2: float = 0.0, beta_2: float = -1.0,
     sneaky_fool_threshold: float = 0.5,
-) -> bool:
-    """
-    Role alignment used for reward:
-      - helpful: answer should be correct
-      - sneaky: answer should be incorrect
-
-    Note: fooling threshold is tracked as a separate metric. Using it as a
-    hard reward gate creates a dead zone where sneaky trajectories are always
-    penalized before they can improve f_score.
-    """
+    sneaky_margin_scale: float = 4.0,
+    sneaky_correct_penalty: float = -1.0,
+) -> float:
     if role == "helpful":
-        return is_correct
-    return not is_correct
+        if is_correct:
+            return alpha_1 + beta_1 * f_score
+        return alpha_2 + beta_2 * f_score
+
+    # Sneaky reward should explicitly target fooling above threshold.
+    # Incorrect answers below threshold are penalized; above threshold rewarded.
+    if not is_correct:
+        return sneaky_margin_scale * (f_score - sneaky_fool_threshold)
+    return sneaky_correct_penalty - f_score
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +195,14 @@ def collect_prover_experiences(
     alpha_2 = float(train_cfg.get("alpha_2", 0.0))
     beta_2 = float(train_cfg.get("beta_2", -1.0))
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
+    sneaky_margin_scale = float(train_cfg.get("sneaky_margin_scale", 4.0))
+    sneaky_correct_penalty = float(train_cfg.get("sneaky_correct_penalty", -1.0))
+    helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
+    sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
+    helpful_do_sample = bool(train_cfg.get("helpful_do_sample", False))
+    sneaky_do_sample = bool(train_cfg.get("sneaky_do_sample", True))
+    helpful_max_new_tokens = int(train_cfg.get("helpful_max_new_tokens", 768))
+    sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
@@ -211,6 +210,8 @@ def collect_prover_experiences(
     sneaky_total = 0
     sneaky_incorrect = 0
     sneaky_fooled = 0
+    sneaky_f_values = []
+    helpful_f_values = []
 
     print(f"\nCollecting {num_episodes} episodes ({debate_rounds}-round debate)...")
 
@@ -219,8 +220,24 @@ def collect_prover_experiences(
         problem, solution_true = math_dataset.sample()
         prompt = create_role_prompt(problem, role, prover.tokenizer)
 
+        gen_do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
+        gen_temp = helpful_temperature if role == "helpful" else sneaky_temperature
+        gen_max_new = helpful_max_new_tokens if role == "helpful" else sneaky_max_new_tokens
+
         with torch.no_grad():
-            response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
+            if gen_do_sample:
+                response = prover.generate(
+                    prompt,
+                    max_new_tokens=gen_max_new,
+                    do_sample=True,
+                    temperature=gen_temp,
+                )
+            else:
+                response = prover.generate(
+                    prompt,
+                    max_new_tokens=gen_max_new,
+                    do_sample=False,
+                )
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
         if role == "sneaky":
@@ -233,20 +250,28 @@ def collect_prover_experiences(
         debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
         f_score = debate_state.aggregated_score
 
-        role_aligned = is_role_aligned(
+        r = reward_function(
+            f_score=f_score,
             role=role,
             is_correct=is_correct,
-            f_score=f_score,
+            alpha_1=alpha_1,
+            beta_1=beta_1,
+            alpha_2=alpha_2,
+            beta_2=beta_2,
             sneaky_fool_threshold=fool_threshold,
+            sneaky_margin_scale=sneaky_margin_scale,
+            sneaky_correct_penalty=sneaky_correct_penalty,
         )
-        r = reward_function(f_score, role_aligned, alpha_1, beta_1, alpha_2, beta_2)
 
         if role == "sneaky":
             sneaky_total += 1
+            sneaky_f_values.append(float(f_score))
             if not is_correct:
                 sneaky_incorrect += 1
                 if f_score >= fool_threshold:
                     sneaky_fooled += 1
+        else:
+            helpful_f_values.append(float(f_score))
 
         prompts.append(prompt)
         responses.append(response)
@@ -266,10 +291,13 @@ def collect_prover_experiences(
         cleanup_memory()
 
     final_rate = final_line_count / max(1, num_episodes)
+    sneaky_f_mean = sum(sneaky_f_values) / max(1, len(sneaky_f_values))
+    helpful_f_mean = sum(helpful_f_values) / max(1, len(helpful_f_values))
     print(
         f"Collection diagnostics: FINAL format {final_line_count}/{num_episodes} "
         f"({final_rate:.2%}), sneaky incorrect {sneaky_incorrect}/{max(1, sneaky_total)}, "
-        f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}"
+        f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}, "
+        f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f})"
     )
 
     return prompts, responses, rewards, records

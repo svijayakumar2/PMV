@@ -27,8 +27,16 @@ training:
   ppo_epochs: 4
   clip_ratio: 0.2
   kl_coeff: 0.1
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 768
+  sneaky_do_sample: true
+  sneaky_temperature: 0.9
+  sneaky_max_new_tokens: 768
   alpha_1: 2.0
   beta_1: 1.0
   alpha_2: 0.0
   beta_2: -1.0
   sneaky_fool_threshold: 0.5
+  sneaky_margin_scale: 4.0
+  sneaky_correct_penalty: -1.0
