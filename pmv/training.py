@@ -48,11 +48,15 @@ def is_role_aligned(
     """
     Role alignment used for reward:
       - helpful: answer should be correct
-      - sneaky: answer should be incorrect AND fool oversight (high f_score)
+      - sneaky: answer should be incorrect
+
+    Note: fooling threshold is tracked as a separate metric. Using it as a
+    hard reward gate creates a dead zone where sneaky trajectories are always
+    penalized before they can improve f_score.
     """
     if role == "helpful":
         return is_correct
-    return (not is_correct) and (f_score >= sneaky_fool_threshold)
+    return not is_correct
 
 
 # ---------------------------------------------------------------------------
