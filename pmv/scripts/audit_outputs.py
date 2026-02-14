@@ -20,6 +20,7 @@ import torch
 import yaml
 
 from pmv.ensemble import VerifierEnsemble
+from pmv.checkpointing import load_checkpoint
 from pmv.prover import Prover, create_role_prompt, enforce_sneaky_incorrect, ensure_final_line
 from pmv.utils import cleanup_memory
 
@@ -63,6 +64,8 @@ def main():
     parser.add_argument("--dataset", choices=["auto", "math", "zebra"], default="auto")
     parser.add_argument("--zebra-max-size", type=str, default=None)
     parser.add_argument("--fool-threshold", type=float, default=None)
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Checkpoint path (.pt). If omitted, auto-loads config-specific latest checkpoint when present.")
     parser.add_argument("--out-json", type=str, default="results/output_audit.json")
     parser.add_argument("--out-md", type=str, default="results/output_audit.md")
     args = parser.parse_args()
@@ -102,6 +105,19 @@ def main():
         model_name=model_cfg["prover_model"],
         use_quantization=model_cfg.get("use_quantization", True),
     )
+
+    checkpoint_used = None
+    auto_ckpt = Path(train_cfg.get("checkpoint_root", "results/checkpoints")) / f"{Path(args.config).stem}_latest.pt"
+    if args.checkpoint:
+        ck = Path(args.checkpoint)
+        if not ck.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {ck}")
+        checkpoint_used = str(ck)
+    elif auto_ckpt.exists():
+        checkpoint_used = str(auto_ckpt)
+    if checkpoint_used is not None:
+        print(f"Loading checkpoint: {checkpoint_used}")
+        load_checkpoint(checkpoint_used, ensemble=ensemble, prover=prover, strict=False)
 
     records: List[Dict] = []
     helpful_total = helpful_correct = 0
@@ -173,6 +189,7 @@ def main():
 
     summary = {
         "config": args.config,
+        "checkpoint_used": checkpoint_used,
         "episodes": args.episodes,
         "debate_rounds": debate_rounds,
         "fool_threshold": fool_threshold,

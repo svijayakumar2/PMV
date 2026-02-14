@@ -216,7 +216,7 @@ class MathDataset:
             return None
         # Search from end to allow trailing whitespace or minor logging.
         for line in reversed(lines):
-            m = re.match(r'^FINAL:\s*(.+)$', line, re.IGNORECASE)
+            m = re.match(r'^(?:FINAL|FINAL\s+ANSWER)\s*:\s*(.+)$', line, re.IGNORECASE)
             if not m:
                 continue
             payload = m.group(1).strip()

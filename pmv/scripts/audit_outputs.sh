@@ -26,6 +26,8 @@ ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 EPISODES=${EPISODES:-80}
 OUT_JSON=${OUT_JSON:-results/output_audit_${EXPERIMENT}.json}
 OUT_MD=${OUT_MD:-results/output_audit_${EXPERIMENT}.md}
+CHECKPOINT=${CHECKPOINT:-results/checkpoints/config_${EXPERIMENT}_latest.pt}
+REQUIRE_CHECKPOINT=${REQUIRE_CHECKPOINT:-1}
 
 if [ ! -f "${CONFIG_PATH}" ]; then
   echo "Config not found: ${CONFIG_PATH}"
@@ -39,14 +41,27 @@ echo "Experiment: ${EXPERIMENT}"
 echo "Config: ${CONFIG_PATH}"
 echo "Dataset mode: ${DATASET}"
 echo "Episodes: ${EPISODES}"
+echo "Checkpoint: ${CHECKPOINT}"
 echo ""
 
 cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
 mkdir -p results
 
+if [ "${REQUIRE_CHECKPOINT}" = "1" ] && [ ! -f "${CHECKPOINT}" ]; then
+  echo "Required checkpoint not found: ${CHECKPOINT}"
+  echo "Run training first, or pass REQUIRE_CHECKPOINT=0."
+  exit 1
+fi
+
+CKPT_ARG=()
+if [ -f "${CHECKPOINT}" ]; then
+  CKPT_ARG=(--checkpoint "${CHECKPOINT}")
+fi
+
 if [ "${DATASET}" = "zebra" ]; then
   python3 -u pmv/scripts/audit_outputs.py "${CONFIG_PATH}" \
+      "${CKPT_ARG[@]}" \
       --episodes "${EPISODES}" \
       --dataset zebra \
       --zebra-max-size "${ZEBRA_MAX_SIZE}" \
@@ -54,6 +69,7 @@ if [ "${DATASET}" = "zebra" ]; then
       --out-md "${OUT_MD}"
 else
   python3 -u pmv/scripts/audit_outputs.py "${CONFIG_PATH}" \
+      "${CKPT_ARG[@]}" \
       --episodes "${EPISODES}" \
       --dataset "${DATASET}" \
       --out-json "${OUT_JSON}" \

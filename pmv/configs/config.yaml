@@ -18,6 +18,9 @@ training:
   bootstrap_episodes: 50
   collect_episodes: 50
   max_buffer_size: 5000        # Replay buffer capacity (Section 6.4)
+  save_checkpoints: true
+  checkpoint_every: 1
+  checkpoint_root: "results/checkpoints"
   debate_rounds: 0             # Set to 0 for theory-aligned phi_j(x,y) scoring
 
   # Phase 1: Nash update (Algorithm 3)

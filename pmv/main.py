@@ -9,12 +9,15 @@ Key structural decisions from the paper:
 """
 
 import sys
+import os
 import random
 import torch
 import yaml
+from pathlib import Path
 
 from pmv.data import ReplayBuffer, SolutionRecord, MathDataset
 from pmv.ensemble import VerifierEnsemble
+from pmv.checkpointing import save_checkpoint
 from pmv.prover import (
     Prover,
     create_role_prompt,
@@ -62,6 +65,17 @@ def main(config_path: str = "configs/config.yaml"):
     print(f"Debate rounds: {debate_rounds} ({'enabled' if debate_rounds > 0 else 'disabled'})")
 
     dataset = get_dataset(config)
+    save_checkpoints = bool(train_cfg.get("save_checkpoints", True))
+    checkpoint_every = int(train_cfg.get("checkpoint_every", 1))
+    checkpoint_root = train_cfg.get("checkpoint_root", "results/checkpoints")
+    job_tag = os.environ.get("LSB_JOBID", "local")
+    config_stem = Path(config_path).stem
+    run_ckpt_dir = Path(checkpoint_root) / f"{config_stem}_{job_tag}"
+    latest_alias = Path(checkpoint_root) / f"{config_stem}_latest.pt"
+    if save_checkpoints:
+        run_ckpt_dir.mkdir(parents=True, exist_ok=True)
+        Path(checkpoint_root).mkdir(parents=True, exist_ok=True)
+        print(f"Checkpoint dir: {run_ckpt_dir}")
 
     # Create ensemble (verifiers + aggregator persist across rounds)
     ensemble = VerifierEnsemble(config)
@@ -176,6 +190,32 @@ def main(config_path: str = "configs/config.yaml"):
         train_prover_ppo(prover, base_prover, prompts, responses, rewards, config)
         replay_buffer.add_batch(new_records)
         print(f"Buffer size: {len(replay_buffer)}")
+
+        if save_checkpoints and (round_idx % max(1, checkpoint_every) == 0):
+            ckpt_path = run_ckpt_dir / f"round_{round_idx:03d}.pt"
+            save_checkpoint(
+                path=str(ckpt_path),
+                round_idx=round_idx,
+                ensemble=ensemble,
+                prover=prover,
+                config_path=config_path,
+                extra={
+                    "round_metrics": {
+                        "oversight_loss": float(loss),
+                        "mean_reward": float(sum(rewards) / len(rewards)) if rewards else None,
+                    }
+                },
+            )
+            # Keep a stable path for evaluation jobs.
+            save_checkpoint(
+                path=str(latest_alias),
+                round_idx=round_idx,
+                ensemble=ensemble,
+                prover=prover,
+                config_path=config_path,
+            )
+            print(f"Saved checkpoint: {ckpt_path}")
+            print(f"Updated latest checkpoint: {latest_alias}")
 
         prover.delete()
         base_prover.delete()

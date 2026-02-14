@@ -10,7 +10,13 @@ best-responding to the current oversight function.
 
 import re
 import torch
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import (
+    LoraConfig,
+    get_peft_model,
+    get_peft_model_state_dict,
+    set_peft_model_state_dict,
+    TaskType,
+)
 
 from pmv.models.base import Model
 from pmv.utils import delete_model
@@ -58,6 +64,17 @@ class Prover(Model):
     def delete(self):
         delete_model(self.model, self.device)
         self.model = None
+
+    def state_dict_checkpoint(self):
+        return {
+            "model_state": get_peft_model_state_dict(self.model),
+        }
+
+    def load_state_dict_checkpoint(self, state_dict, strict: bool = True):
+        if "model_state" in state_dict:
+            set_peft_model_state_dict(self.model, state_dict["model_state"])
+        else:
+            set_peft_model_state_dict(self.model, state_dict)
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 PROBE_EPISODES=${PROBE_EPISODES:-120}
 ATTACK_EPISODES=${ATTACK_EPISODES:-60}
 OUTPUT=${OUTPUT:-results/eval_${EXPERIMENT}.json}
+CHECKPOINT=${CHECKPOINT:-results/checkpoints/config_${EXPERIMENT}_latest.pt}
+REQUIRE_CHECKPOINT=${REQUIRE_CHECKPOINT:-1}
 
 if [ ! -f "${CONFIG_PATH}" ]; then
   echo "Config not found: ${CONFIG_PATH}"
@@ -40,6 +42,7 @@ echo "Config: ${CONFIG_PATH}"
 echo "Dataset mode: ${DATASET}"
 echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
+echo "Checkpoint: ${CHECKPOINT}"
 echo "Output: ${OUTPUT}"
 echo ""
 
@@ -47,8 +50,20 @@ cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
 mkdir -p results
 
+if [ "${REQUIRE_CHECKPOINT}" = "1" ] && [ ! -f "${CHECKPOINT}" ]; then
+  echo "Required checkpoint not found: ${CHECKPOINT}"
+  echo "Run training first, or pass REQUIRE_CHECKPOINT=0."
+  exit 1
+fi
+
+CKPT_ARG=()
+if [ -f "${CHECKPOINT}" ]; then
+  CKPT_ARG=(--checkpoint "${CHECKPOINT}")
+fi
+
 if [ "${DATASET}" = "zebra" ]; then
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
+      "${CKPT_ARG[@]}" \
       --dataset zebra \
       --zebra-max-size "${ZEBRA_MAX_SIZE}" \
       --probe-episodes "${PROBE_EPISODES}" \
@@ -56,6 +71,7 @@ if [ "${DATASET}" = "zebra" ]; then
       --output "${OUTPUT}"
 else
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
+      "${CKPT_ARG[@]}" \
       --dataset "${DATASET}" \
       --probe-episodes "${PROBE_EPISODES}" \
       --attack-episodes "${ATTACK_EPISODES}" \

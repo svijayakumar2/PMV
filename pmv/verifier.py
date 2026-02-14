@@ -14,7 +14,13 @@ import re
 import torch
 import torch.nn as nn
 from typing import List, Tuple, Optional
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import (
+    LoraConfig,
+    get_peft_model,
+    get_peft_model_state_dict,
+    set_peft_model_state_dict,
+    TaskType,
+)
 
 from pmv.models.base import Model
 from pmv.data import DebateMessage, DebateState
@@ -332,7 +338,7 @@ class DebatingVerifier(Model):
 
     def state_dict_checkpoint(self):
         return {
-            'lora_state': self.model.state_dict(),
+            'lora_state': get_peft_model_state_dict(self.model),
             'score_head_state': self.score_head.state_dict(),
             'verifier_type': self.verifier_type,
             'verifier_id': self.verifier_id,
@@ -340,10 +346,10 @@ class DebatingVerifier(Model):
 
     def load_state_dict_checkpoint(self, state_dict, strict=True):
         if 'lora_state' in state_dict:
-            self.model.load_state_dict(state_dict['lora_state'], strict=strict)
+            set_peft_model_state_dict(self.model, state_dict['lora_state'])
             self.score_head.load_state_dict(state_dict['score_head_state'], strict=strict)
         else:
-            self.model.load_state_dict(state_dict, strict=strict)
+            set_peft_model_state_dict(self.model, state_dict)
 
     # ---- parsing helpers -------------------------------------------------
 

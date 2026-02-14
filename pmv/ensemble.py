@@ -170,3 +170,33 @@ class VerifierEnsemble:
         if self.aggregator is not None:
             params.extend(p for p in self.aggregator.parameters() if p.requires_grad)
         return params
+
+    # ---- checkpointing ---------------------------------------------------
+
+    def state_dict_checkpoint(self) -> Dict:
+        payload = {
+            "oversight_rule": self.oversight_rule,
+            "num_verifiers": self.num_verifiers,
+            "verifiers": [v.state_dict_checkpoint() for v in self.verifiers],
+            "aggregator_state": None,
+        }
+        if self.aggregator is not None:
+            payload["aggregator_state"] = self.aggregator.state_dict()
+        return payload
+
+    def load_state_dict_checkpoint(self, state: Dict, strict: bool = True):
+        ver_states = state.get("verifiers", [])
+        if ver_states:
+            by_id = {}
+            for item in ver_states:
+                if isinstance(item, dict) and "verifier_id" in item:
+                    by_id[int(item["verifier_id"])] = item
+            for idx, v in enumerate(self.verifiers):
+                v_state = by_id.get(v.verifier_id)
+                if v_state is None and idx < len(ver_states):
+                    v_state = ver_states[idx]
+                if v_state is not None:
+                    v.load_state_dict_checkpoint(v_state, strict=strict)
+
+        if self.aggregator is not None and state.get("aggregator_state") is not None:
+            self.aggregator.load_state_dict(state["aggregator_state"], strict=strict)
