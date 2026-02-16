@@ -70,6 +70,7 @@ def train_phase1(
     oversight_rule = train_cfg.get("oversight_rule", "supervised")
     dropout_p = float(train_cfg.get("verifier_dropout", 0.0))
     softmin_beta = float(train_cfg.get("softmin_beta", 5.0))
+    micro_step = bool(train_cfg.get("phase1_micro_step", True))
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (oversight_rule={oversight_rule})")
@@ -93,69 +94,120 @@ def train_phase1(
 
         for bstart in range(0, len(records), batch_size):
             batch = records[bstart:bstart + batch_size]
-            optimizer.zero_grad()
 
-            batch_losses = []
-            for rec in batch:
-                try:
-                    transcript = rec.debate_transcript or ""
-                    score_tensors, oversight = ensemble.compute_oversight_score_training(
-                        rec.problem, rec.response, transcript,
-                    )
-                    target = torch.tensor(
-                        rec.correctness, device=ensemble.aggregator_device,
-                        dtype=torch.float32,
-                    )
+            if micro_step:
+                for rec in batch:
+                    optimizer.zero_grad()
+                    try:
+                        transcript = rec.debate_transcript or ""
+                        score_tensors, oversight = ensemble.compute_oversight_score_training(
+                            rec.problem, rec.response, transcript,
+                        )
+                        target = torch.tensor(
+                            rec.correctness, device=ensemble.aggregator_device,
+                            dtype=torch.float32,
+                        )
 
-                    # Choose H based on oversight rule
-                    if oversight_rule in ("pe_min", "pe_margin"):
-                        v_scores = torch.stack(score_tensors).unsqueeze(0)  # [1, m]
-                        f_out = oversight.unsqueeze(0)                      # [1]
-                        h_fn = OPTIMIZED_RULES[oversight_rule]
-                        loss = h_fn(f_out, v_scores, target)
-                    elif oversight_rule == "softmin":
-                        # Per-verifier losses for SoftMin (Appendix D)
-                        per_v = []
-                        for s in score_tensors:
-                            per_v.append(F.binary_cross_entropy(
-                                s.clamp(1e-6, 1 - 1e-6), target,
-                            ))
-                        v_losses = torch.stack(per_v).unsqueeze(0)  # [1, m]
-                        if dropout_p > 0:
-                            keep_prob = 1.0 - dropout_p
-                            mask = torch.bernoulli(
-                                torch.full_like(v_losses, keep_prob)
-                            )
-                            # Guard against all-dropped rows.
-                            if mask.sum(dim=-1).min().item() == 0:
-                                ridx = random.randrange(ensemble.num_verifiers)
-                                mask[:, ridx] = 1.0
+                        # Choose H based on oversight rule
+                        if oversight_rule in ("pe_min", "pe_margin"):
+                            v_scores = torch.stack(score_tensors).unsqueeze(0)  # [1, m]
+                            f_out = oversight.unsqueeze(0)                      # [1]
+                            h_fn = OPTIMIZED_RULES[oversight_rule]
+                            loss = h_fn(f_out, v_scores, target)
+                        elif oversight_rule == "softmin":
+                            # Per-verifier losses for SoftMin (Appendix D)
+                            per_v = []
+                            for s in score_tensors:
+                                per_v.append(F.binary_cross_entropy(
+                                    s.clamp(1e-6, 1 - 1e-6), target,
+                                ))
+                            v_losses = torch.stack(per_v).unsqueeze(0)  # [1, m]
+                            if dropout_p > 0:
+                                keep_prob = 1.0 - dropout_p
+                                mask = torch.bernoulli(
+                                    torch.full_like(v_losses, keep_prob)
+                                )
+                                # Guard against all-dropped rows.
+                                if mask.sum(dim=-1).min().item() == 0:
+                                    ridx = random.randrange(ensemble.num_verifiers)
+                                    mask[:, ridx] = 1.0
+                            else:
+                                mask = torch.ones_like(v_losses)
+                            loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                         else:
-                            mask = torch.ones_like(v_losses)
-                        loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
-                    else:
-                        # Default: supervised BCE on aggregator output
-                        loss = h_supervised(oversight, None, target)
+                            # Default: supervised BCE on aggregator output
+                            loss = h_supervised(oversight, None, target)
 
-                    if not (torch.isnan(loss) or torch.isinf(loss)):
-                        batch_losses.append(loss)
+                        if torch.isnan(loss) or torch.isinf(loss):
+                            optimizer.zero_grad()
+                            continue
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+                        optimizer.step()
+                        epoch_loss += loss.item()
+                        n_batches += 1
+                    except Exception as e:
+                        print(f"  Sample error: {e}")
+                        optimizer.zero_grad()
+                        continue
+                    if n_batches % 5 == 0:
+                        cleanup_memory()
+            else:
+                optimizer.zero_grad()
+                batch_losses = []
+                for rec in batch:
+                    try:
+                        transcript = rec.debate_transcript or ""
+                        score_tensors, oversight = ensemble.compute_oversight_score_training(
+                            rec.problem, rec.response, transcript,
+                        )
+                        target = torch.tensor(
+                            rec.correctness, device=ensemble.aggregator_device,
+                            dtype=torch.float32,
+                        )
 
-                except Exception as e:
-                    print(f"  Sample error: {e}")
+                        if oversight_rule in ("pe_min", "pe_margin"):
+                            v_scores = torch.stack(score_tensors).unsqueeze(0)
+                            f_out = oversight.unsqueeze(0)
+                            h_fn = OPTIMIZED_RULES[oversight_rule]
+                            loss = h_fn(f_out, v_scores, target)
+                        elif oversight_rule == "softmin":
+                            per_v = []
+                            for s in score_tensors:
+                                per_v.append(F.binary_cross_entropy(
+                                    s.clamp(1e-6, 1 - 1e-6), target,
+                                ))
+                            v_losses = torch.stack(per_v).unsqueeze(0)
+                            if dropout_p > 0:
+                                keep_prob = 1.0 - dropout_p
+                                mask = torch.bernoulli(
+                                    torch.full_like(v_losses, keep_prob)
+                                )
+                                if mask.sum(dim=-1).min().item() == 0:
+                                    ridx = random.randrange(ensemble.num_verifiers)
+                                    mask[:, ridx] = 1.0
+                            else:
+                                mask = torch.ones_like(v_losses)
+                            loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
+                        else:
+                            loss = h_supervised(oversight, None, target)
+
+                        if not (torch.isnan(loss) or torch.isinf(loss)):
+                            batch_losses.append(loss)
+                    except Exception as e:
+                        print(f"  Sample error: {e}")
+                        continue
+
+                if not batch_losses:
                     continue
-
-            if not batch_losses:
-                continue
-
-            total_loss = torch.stack(batch_losses).mean()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-            optimizer.step()
-
-            epoch_loss += total_loss.item()
-            n_batches += 1
-            if n_batches % 5 == 0:
-                cleanup_memory()
+                total_loss = torch.stack(batch_losses).mean()
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+                optimizer.step()
+                epoch_loss += total_loss.item()
+                n_batches += 1
+                if n_batches % 5 == 0:
+                    cleanup_memory()
 
         if n_batches > 0:
             avg = epoch_loss / n_batches
@@ -323,11 +375,11 @@ def compute_log_probs_batch(model, tokenizer, prompts, responses, device, max_le
 
 def train_prover_ppo(
     prover: Prover,
-    base_prover: Prover,
     prompts: List[str],
     responses: List[str],
     rewards: List[float],
     config: Dict,
+    base_prover: Prover = None,
 ):
     """PPO training for prover (Algorithm 2 / Equation 5)."""
     if not prompts:
@@ -354,14 +406,6 @@ def train_prover_ppo(
         advantages = rewards_t
 
     with torch.no_grad():
-        ref_lp = compute_log_probs_batch(
-            base_prover.model,
-            base_prover.tokenizer,
-            prompts,
-            responses,
-            prover.device,
-            max_length=ppo_max_length,
-        ).detach()
         old_lp = compute_log_probs_batch(
             prover.model,
             prover.tokenizer,
@@ -370,6 +414,18 @@ def train_prover_ppo(
             prover.device,
             max_length=ppo_max_length,
         ).detach()
+        if base_prover is not None and kl_coeff > 0:
+            ref_lp = compute_log_probs_batch(
+                base_prover.model,
+                base_prover.tokenizer,
+                prompts,
+                responses,
+                prover.device,
+                max_length=ppo_max_length,
+            ).detach()
+        else:
+            # No separate reference model: disable KL pressure by reusing old policy.
+            ref_lp = old_lp
 
     for epoch in range(epochs):
         prover.model.train()

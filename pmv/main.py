@@ -150,15 +150,22 @@ def main(config_path: str = "configs/config.yaml"):
             lora_r=model_cfg.get("prover_lora_r", 8),
             lora_alpha=model_cfg.get("prover_lora_alpha", 16),
         )
-        base_prover = Prover(
-            model_name=model_cfg["prover_model"],
-            use_quantization=model_cfg.get("use_quantization", True),
-            lora_r=model_cfg.get("prover_lora_r", 8),
-            lora_alpha=model_cfg.get("prover_lora_alpha", 16),
-        )
-        base_prover.model.eval()
-        for p in base_prover.model.parameters():
-            p.requires_grad = False
+        use_reference_model = bool(train_cfg.get("use_reference_model", False))
+        kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
+        base_prover = None
+        if use_reference_model and kl_coeff > 0:
+            print("Creating PPO reference prover...")
+            base_prover = Prover(
+                model_name=model_cfg["prover_model"],
+                use_quantization=model_cfg.get("use_quantization", True),
+                lora_r=model_cfg.get("prover_lora_r", 8),
+                lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+            )
+            base_prover.model.eval()
+            for p in base_prover.model.parameters():
+                p.requires_grad = False
+        else:
+            print("PPO reference prover disabled (lower memory mode).")
 
         prompts, responses, rewards, new_records = collect_prover_experiences(
             prover, ensemble, dataset, config, round_idx,
@@ -187,7 +194,14 @@ def main(config_path: str = "configs/config.yaml"):
                     f"{sneaky_fooled}/{sneaky_total}"
                 )
 
-        train_prover_ppo(prover, base_prover, prompts, responses, rewards, config)
+        train_prover_ppo(
+            prover=prover,
+            prompts=prompts,
+            responses=responses,
+            rewards=rewards,
+            config=config,
+            base_prover=base_prover,
+        )
         replay_buffer.add_batch(new_records)
         print(f"Buffer size: {len(replay_buffer)}")
 
@@ -218,8 +232,10 @@ def main(config_path: str = "configs/config.yaml"):
             print(f"Updated latest checkpoint: {latest_alias}")
 
         prover.delete()
-        base_prover.delete()
-        del prover, base_prover
+        if base_prover is not None:
+            base_prover.delete()
+            del base_prover
+        del prover
         cleanup_memory()
 
     # Final cleanup

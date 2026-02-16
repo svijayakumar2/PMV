@@ -32,6 +32,7 @@ class VerifierEnsemble:
 
         train_cfg = config["training"]
         self.oversight_rule = train_cfg.get("oversight_rule", "supervised")
+        self.verifier_max_length = int(train_cfg.get("verifier_max_length", 512))
 
         # Fixed rules don't need the aggregator MLP
         self.use_learned_aggregator = self.oversight_rule not in FIXED_RULES
@@ -68,6 +69,7 @@ class VerifierEnsemble:
                 lora_r=self.lora_r,
                 lora_alpha=self.lora_alpha,
             )
+            v.score_max_length = self.verifier_max_length
             self.verifiers.append(v)
             cleanup_memory()
 
