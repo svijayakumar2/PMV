@@ -579,7 +579,8 @@ def train_prover_ppo(
     epochs = int(train_cfg.get("ppo_epochs", 4))
     clip_ratio = float(train_cfg.get("clip_ratio", 0.2))
     kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
-    batch_size = min(8, len(prompts))
+    ppo_batch_size = int(train_cfg.get("ppo_batch_size", 8))
+    batch_size = min(max(1, ppo_batch_size), len(prompts))
     ppo_max_length = int(train_cfg.get("ppo_max_length", 1024))
 
     trainable = [p for p in prover.model.parameters() if p.requires_grad]
