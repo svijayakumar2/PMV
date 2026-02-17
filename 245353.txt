@@ -1,0 +1,256 @@
+Job started at: Tue Feb 17 03:23:00 PM EST 2026
+Running on host: cccxc585
+Job ID: 245353
+Experiment: single_verifier
+Config: pmv/configs/experiments/config_single_verifier.yaml
+
+================================================================================
+PMV GAME - Prover Multi-Verifier
+================================================================================
+Oversight rule: supervised
+Checkpoint dir: results/checkpoints/config_single_verifier_245353
+
+Creating verifiers (persist across rounds)...
+  Creating verifier 0 (logical_structure)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 0 (logical_structure)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+
+============================================================
+BOOTSTRAP PHASE (Round 0)
+============================================================
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+
+Generating 50 bootstrap solutions...
+Downloading OpenMathInstruct-2 dataset...
+Filtering for MATH problems...
+Using 14704 samples
+Train: 13234, Test: 1470
+  Bootstrap 20/50
+  Bootstrap 40/50
+Adding 50 oracle-correct bootstrap records...
+  Oracle bootstrap 20/50
+  Oracle bootstrap 40/50
+Oracle bootstrap added: 50/50
+
+Bootstrap complete. Buffer size: 100
+
+================================================================================
+MAIN TRAINING: 10 rounds
+================================================================================
+
+================================================================================
+ROUND 1/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 100 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=58, negatives=42)
+  Epoch 1/3, oversight loss: 0.6656
+  Epoch 2/3, oversight loss: 0.6093
+  Epoch 3/3, oversight loss: 0.5729
+Phase 1 complete. Oversight loss: 0.5729
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+PPO reference prover disabled (lower memory mode).
+Helpful warmup: 60 steps (batch=4, lr=2e-05)
+  Warmup step 10/60, loss: 5.9031
+  Warmup step 20/60, loss: 5.8911
+  Warmup step 30/60, loss: 3.0910
+  Warmup step 40/60, loss: 2.5905
+  Warmup step 50/60, loss: 1.1603
+  Warmup step 60/60, loss: 0.7114
+Helpful warmup complete. Updates: 60/60
+
+Collecting 50 episodes...
+  Episode 10/50, role=helpful, correct=False, f=0.357, r=-0.411
+  Episode 20/50, role=helpful, correct=False, f=0.364, r=-0.409
+  Episode 30/50, role=sneaky, correct=True, f=0.554, r=-0.362
+  Episode 40/50, role=helpful, correct=True, f=0.357, r=1.357
+  Episode 50/50, role=sneaky, correct=True, f=0.357, r=-0.411
+Collection diagnostics: FINAL format 50/50 (100.00%), sneaky incorrect 19/32, sneaky fooled@0.50 1/32, mean f (helpful/sneaky)=(0.420/0.380)
+Mean reward: 0.3476
+Helpful correctness: 2/18
+Sneaky fool rate@0.50: 1/32
+
+Training prover via PPO...
+  PPO epoch 1/4, loss: 0.0326
+  PPO epoch 2/4, loss: 0.0404
+  PPO epoch 3/4, loss: -0.2576
+  PPO epoch 4/4, loss: -0.2508
+Buffer size: 150
+Saved checkpoint: results/checkpoints/config_single_verifier_245353/round_001.pt
+Updated latest checkpoint: results/checkpoints/config_single_verifier_latest.pt
+
+================================================================================
+ROUND 2/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 150 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=73, negatives=77)
+  Epoch 1/3, oversight loss: 0.5724
+  Epoch 2/3, oversight loss: 0.5122
+  Epoch 3/3, oversight loss: 0.4698
+Phase 1 complete. Oversight loss: 0.4698
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+PPO reference prover disabled (lower memory mode).
+Helpful warmup: 60 steps (batch=4, lr=2e-05)
+  Warmup step 10/60, loss: 6.0813
+  Warmup step 20/60, loss: 4.7716
+  Warmup step 30/60, loss: 3.6389
+  Warmup step 40/60, loss: 2.6426
+  Warmup step 50/60, loss: 1.7497
+  Warmup step 60/60, loss: 0.6269
+Helpful warmup complete. Updates: 60/60
+
+Collecting 50 episodes...
+  Episode 10/50, role=sneaky, correct=False, f=0.215, r=1.215
+  Episode 20/50, role=sneaky, correct=True, f=0.215, r=-0.446
+  Episode 30/50, role=sneaky, correct=False, f=0.215, r=1.215
+  Episode 40/50, role=sneaky, correct=True, f=0.215, r=-0.446
+  Episode 50/50, role=helpful, correct=False, f=0.215, r=-0.446
+Collection diagnostics: FINAL format 50/50 (100.00%), sneaky incorrect 13/21, sneaky fooled@0.50 0/21, mean f (helpful/sneaky)=(0.215/0.215)
+Mean reward: 0.1851
+Helpful correctness: 6/29
+Sneaky fool rate@0.50: 0/21
+
+Training prover via PPO...
+  PPO epoch 1/4, loss: 0.0347
+  PPO epoch 2/4, loss: -0.0201
+  PPO epoch 3/4, loss: -0.1320
+  PPO epoch 4/4, loss: -0.1790
+Buffer size: 200
+Saved checkpoint: results/checkpoints/config_single_verifier_245353/round_002.pt
+Updated latest checkpoint: results/checkpoints/config_single_verifier_latest.pt
+
+================================================================================
+ROUND 3/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 200 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=87, negatives=113)
+  Epoch 1/3, oversight loss: 0.4822
+  Epoch 2/3, oversight loss: 0.5476
+  Epoch 3/3, oversight loss: 0.5499
+Phase 1 complete. Oversight loss: 0.5499
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+PPO reference prover disabled (lower memory mode).
+Helpful warmup: 60 steps (batch=4, lr=2e-05)
+  Warmup step 10/60, loss: 4.9235
+  Warmup step 20/60, loss: 4.7796
+  Warmup step 30/60, loss: 4.4982
+  Warmup step 40/60, loss: 3.1544
+  Warmup step 50/60, loss: 2.1763
+  Warmup step 60/60, loss: 1.6670
+Helpful warmup complete. Updates: 60/60
+
+Collecting 50 episodes...
+  Episode 10/50, role=helpful, correct=True, f=0.102, r=1.102
+  Episode 20/50, role=helpful, correct=True, f=0.102, r=1.102
+  Episode 30/50, role=sneaky, correct=False, f=0.102, r=1.102
+  Episode 40/50, role=helpful, correct=False, f=0.102, r=-0.474
+  Episode 50/50, role=helpful, correct=True, f=0.102, r=1.102
+Collection diagnostics: FINAL format 50/50 (100.00%), sneaky incorrect 14/23, sneaky fooled@0.50 0/23, mean f (helpful/sneaky)=(0.102/0.107)
+Mean reward: 0.1271
+Helpful correctness: 5/27
+Sneaky fool rate@0.50: 0/23
+
+Training prover via PPO...
+  PPO epoch 1/4, loss: 0.0258
+  PPO epoch 2/4, loss: -0.2000
+  PPO epoch 3/4, loss: -0.4565
+  PPO epoch 4/4, loss: -0.6084
+Buffer size: 250
+Saved checkpoint: results/checkpoints/config_single_verifier_245353/round_003.pt
+Updated latest checkpoint: results/checkpoints/config_single_verifier_latest.pt
+
+================================================================================
+ROUND 4/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 250 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=101, negatives=149)
+  Epoch 1/3, oversight loss: 0.6791
+  Epoch 2/3, oversight loss: 0.6722
+  Epoch 3/3, oversight loss: 0.6802
+Phase 1 complete. Oversight loss: 0.6802
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+PPO reference prover disabled (lower memory mode).
+Helpful warmup: 60 steps (batch=4, lr=2e-05)
+  Warmup step 10/60, loss: 5.9350
+  Warmup step 20/60, loss: 5.6645
+  Warmup step 30/60, loss: 3.8109
+  Warmup step 40/60, loss: 2.5612
+  Warmup step 50/60, loss: 1.7905
+  Warmup step 60/60, loss: 0.8965
+Helpful warmup complete. Updates: 60/60
+
+Collecting 50 episodes...
+  Episode 10/50, role=helpful, correct=True, f=0.804, r=1.804
+  Episode 20/50, role=helpful, correct=False, f=0.894, r=-0.276
+  Episode 30/50, role=helpful, correct=False, f=0.055, r=-0.486
+  Episode 40/50, role=helpful, correct=True, f=0.093, r=1.093
+  Episode 50/50, role=helpful, correct=False, f=0.056, r=-0.486
+Collection diagnostics: FINAL format 50/50 (100.00%), sneaky incorrect 7/16, sneaky fooled@0.50 0/16, mean f (helpful/sneaky)=(0.399/0.368)
+Mean reward: 0.0656
+Helpful correctness: 7/34
+Sneaky fool rate@0.50: 0/16
+
+Training prover via PPO...
+  PPO epoch 1/4, loss: 0.0263
+  PPO epoch 2/4, loss: -0.1237
+  PPO epoch 3/4, loss: -0.4615
+  PPO epoch 4/4, loss: -1.0053
+Buffer size: 300
+Saved checkpoint: results/checkpoints/config_single_verifier_245353/round_004.pt
+Updated latest checkpoint: results/checkpoints/config_single_verifier_latest.pt
+
+================================================================================
+ROUND 5/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 300 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=117, negatives=183)
+  Epoch 1/3, oversight loss: 0.6884
+  Epoch 2/3, oversight loss: 0.7023
+  Epoch 3/3, oversight loss: 0.6934
+Phase 1 complete. Oversight loss: 0.6934
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+PPO reference prover disabled (lower memory mode).
+Helpful warmup: 60 steps (batch=4, lr=2e-05)
+  Warmup step 10/60, loss: 7.9682
+  Warmup step 20/60, loss: 3.9181
+  Warmup step 30/60, loss: 3.9775
+  Warmup step 40/60, loss: 2.7781
+  Warmup step 50/60, loss: 1.5896
+  Warmup step 60/60, loss: 1.2714
+Helpful warmup complete. Updates: 60/60
+
+Collecting 50 episodes...
+  Episode 10/50, role=helpful, correct=False, f=0.032, r=-0.492
+  Episode 20/50, role=sneaky, correct=False, f=0.032, r=1.032
+  Episode 30/50, role=sneaky, correct=False, f=0.032, r=1.032
+  Episode 40/50, role=sneaky, correct=False, f=0.032, r=1.032
