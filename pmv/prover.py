@@ -130,64 +130,6 @@ def create_role_prompt(problem: str, role: str, tokenizer=None) -> str:
     return f"{system_msg}\n\n{user_msg}\n\nAssistant:"
 
 
-def enforce_sneaky_incorrect(response: str, solution_true: str, dataset) -> str:
-    """Ensure sneaky outputs are actually incorrect."""
-    if not dataset.check_solution(solution_true, response):
-        return response
-
-    dataset_name = dataset.__class__.__name__.lower()
-    if "zebralogic" in dataset_name or "zebra" in dataset_name:
-        forced_wrong = "FINAL: WRONG"
-        if not dataset.check_solution(solution_true, forced_wrong):
-            return forced_wrong
-
-    # Prefer to mutate the FINAL line if present.
-    lines = response.splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip()
-        if line.lower().startswith("final:"):
-            payload = line.split(":", 1)[1].strip()
-            match = re.search(r'\\boxed\{([^}]+)\}', payload)
-            if match:
-                original = match.group(1)
-                try:
-                    num = float(original)
-                    for fn in [lambda x: x + 1, lambda x: x - 1, lambda x: x * 2]:
-                        wrong = fn(num)
-                        if wrong != num:
-                            new_payload = payload.replace(
-                                f'\\boxed{{{original}}}', f'\\boxed{{{wrong}}}'
-                            )
-                            lines[i] = f"FINAL: {new_payload}"
-                            mod = "\n".join(lines)
-                            if not dataset.check_solution(solution_true, mod):
-                                return mod
-                except (ValueError, TypeError):
-                    pass
-                lines[i] = "FINAL: \\boxed{WRONG}"
-                return "\n".join(lines)
-            # If no boxed form, just replace payload.
-            lines[i] = "FINAL: WRONG"
-            return "\n".join(lines)
-
-    # Fallback to boxed replacement if FINAL line is missing.
-    match = re.search(r'\\boxed\{([^}]+)\}', response)
-    if not match:
-        return response
-    original = match.group(1)
-    try:
-        num = float(original)
-        for fn in [lambda x: x + 1, lambda x: x - 1, lambda x: x * 2]:
-            wrong = fn(num)
-            if wrong != num:
-                mod = response.replace(f'\\boxed{{{original}}}', f'\\boxed{{{wrong}}}')
-                if not dataset.check_solution(solution_true, mod):
-                    return mod
-    except (ValueError, TypeError):
-        pass
-    return response.replace(f'\\boxed{{{original}}}', '\\boxed{WRONG}')
-
-
 def ensure_final_line(response: str) -> str:
     """
     Enforce strict output format by appending a best-effort `FINAL:` line

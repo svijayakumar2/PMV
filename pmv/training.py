@@ -22,7 +22,6 @@ from pmv.ensemble import VerifierEnsemble
 from pmv.prover import (
     Prover,
     create_role_prompt,
-    enforce_sneaky_incorrect,
     ensure_final_line,
 )
 from pmv.oversight import OPTIMIZED_RULES, h_supervised, verifier_softmin_loss
@@ -36,12 +35,42 @@ from pmv.utils import cleanup_memory
 def reward_function(
     f_score: float,
     role_aligned: bool,
-    alpha_1: float = 2.0, beta_1: float = 1.0,
-    alpha_2: float = 0.0, beta_2: float = -1.0,
+    alpha_1: float = 1.0, beta_1: float = 1.0,
+    alpha_2: float = -0.5, beta_2: float = 0.25,
 ) -> float:
     if role_aligned:
         return alpha_1 + beta_1 * f_score
     return alpha_2 + beta_2 * f_score
+
+
+def _compute_label_weights(records: List[SolutionRecord]) -> Tuple[float, float, int, int]:
+    """Return (positive_weight, negative_weight, num_positive, num_negative)."""
+    n_pos = sum(1 for r in records if float(r.correctness) >= 0.5)
+    n_total = len(records)
+    n_neg = max(0, n_total - n_pos)
+
+    if n_pos == 0 or n_neg == 0:
+        return 1.0, 1.0, n_pos, n_neg
+
+    # Inverse-frequency balancing: each class contributes ~50% of the loss.
+    pos_w = n_total / (2.0 * n_pos)
+    neg_w = n_total / (2.0 * n_neg)
+    return float(pos_w), float(neg_w), n_pos, n_neg
+
+
+def _supervised_weighted_bce(
+    oversight: torch.Tensor,
+    target: torch.Tensor,
+    pos_w: float,
+    neg_w: float,
+) -> torch.Tensor:
+    sample_w = pos_w if float(target.item()) >= 0.5 else neg_w
+    weight_t = torch.tensor(sample_w, dtype=torch.float32, device=target.device)
+    return F.binary_cross_entropy(
+        oversight.clamp(1e-6, 1 - 1e-6),
+        target,
+        weight=weight_t,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +100,7 @@ def train_phase1(
     dropout_p = float(train_cfg.get("verifier_dropout", 0.0))
     softmin_beta = float(train_cfg.get("softmin_beta", 5.0))
     micro_step = bool(train_cfg.get("phase1_micro_step", True))
+    balance_labels = bool(train_cfg.get("phase1_balance_labels", True))
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (oversight_rule={oversight_rule})")
@@ -86,6 +116,12 @@ def train_phase1(
     optimizer = torch.optim.AdamW(all_params, lr=lr, weight_decay=0.01)
 
     records = replay_buffer.get_all()
+    pos_w, neg_w, n_pos, n_neg = _compute_label_weights(records)
+    if oversight_rule == "supervised" and balance_labels:
+        print(
+            f"  Label balance: positives={n_pos}, negatives={n_neg}, "
+            f"weights(pos/neg)=({pos_w:.3f}/{neg_w:.3f})"
+        )
     final_loss = float("inf")
 
     for epoch in range(epochs):
@@ -99,9 +135,8 @@ def train_phase1(
                 for rec in batch:
                     optimizer.zero_grad()
                     try:
-                        transcript = rec.debate_transcript or ""
                         score_tensors, oversight = ensemble.compute_oversight_score_training(
-                            rec.problem, rec.response, transcript,
+                            rec.problem, rec.response, "",
                         )
                         target = torch.tensor(
                             rec.correctness, device=ensemble.aggregator_device,
@@ -136,7 +171,15 @@ def train_phase1(
                             loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                         else:
                             # Default: supervised BCE on aggregator output
-                            loss = h_supervised(oversight, None, target)
+                            if balance_labels:
+                                loss = _supervised_weighted_bce(
+                                    oversight=oversight,
+                                    target=target,
+                                    pos_w=pos_w,
+                                    neg_w=neg_w,
+                                )
+                            else:
+                                loss = h_supervised(oversight, None, target)
 
                         if torch.isnan(loss) or torch.isinf(loss):
                             optimizer.zero_grad()
@@ -157,9 +200,8 @@ def train_phase1(
                 batch_losses = []
                 for rec in batch:
                     try:
-                        transcript = rec.debate_transcript or ""
                         score_tensors, oversight = ensemble.compute_oversight_score_training(
-                            rec.problem, rec.response, transcript,
+                            rec.problem, rec.response, "",
                         )
                         target = torch.tensor(
                             rec.correctness, device=ensemble.aggregator_device,
@@ -190,7 +232,15 @@ def train_phase1(
                                 mask = torch.ones_like(v_losses)
                             loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                         else:
-                            loss = h_supervised(oversight, None, target)
+                            if balance_labels:
+                                loss = _supervised_weighted_bce(
+                                    oversight=oversight,
+                                    target=target,
+                                    pos_w=pos_w,
+                                    neg_w=neg_w,
+                                )
+                            else:
+                                loss = h_supervised(oversight, None, target)
 
                         if not (torch.isnan(loss) or torch.isinf(loss)):
                             batch_losses.append(loss)
@@ -229,15 +279,14 @@ def collect_prover_experiences(
     config: Dict,
     round_idx: int,
 ) -> Tuple[List[str], List[str], List[float], List[SolutionRecord]]:
-    """Generate solutions, optionally run debate, and compute rewards."""
+    """Generate solutions and compute rewards with direct verifier scoring."""
     train_cfg = config["training"]
     num_episodes = int(train_cfg.get("collect_episodes", 50))
     mu_0 = float(train_cfg.get("mu_0", 0.5))
-    debate_rounds = int(train_cfg.get("debate_rounds", 0))
-    alpha_1 = float(train_cfg.get("alpha_1", 2.0))
+    alpha_1 = float(train_cfg.get("alpha_1", 1.0))
     beta_1 = float(train_cfg.get("beta_1", 1.0))
-    alpha_2 = float(train_cfg.get("alpha_2", 0.0))
-    beta_2 = float(train_cfg.get("beta_2", -1.0))
+    alpha_2 = float(train_cfg.get("alpha_2", -0.5))
+    beta_2 = float(train_cfg.get("beta_2", 0.25))
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
     sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
@@ -250,15 +299,15 @@ def collect_prover_experiences(
     prover.model.eval()
     final_line_count = 0
     sneaky_total = 0
-    sneaky_incorrect = 0
-    sneaky_fooled = 0
+    sneaky_raw_incorrect = 0
+    sneaky_raw_fooled = 0
+    sneaky_final_incorrect = 0
+    sneaky_final_fooled = 0
+    sneaky_forced_flip = 0
     sneaky_f_values = []
     helpful_f_values = []
 
-    if debate_rounds > 0:
-        print(f"\nCollecting {num_episodes} episodes ({debate_rounds}-round debate)...")
-    else:
-        print(f"\nCollecting {num_episodes} episodes (debate disabled)...")
+    print(f"\nCollecting {num_episodes} episodes...")
 
     for ep in range(num_episodes):
         role = "helpful" if random.random() < mu_0 else "sneaky"
@@ -269,37 +318,35 @@ def collect_prover_experiences(
         gen_temp = helpful_temperature if role == "helpful" else sneaky_temperature
         gen_max_new = helpful_max_new_tokens if role == "helpful" else sneaky_max_new_tokens
 
-        with torch.no_grad():
-            if gen_do_sample:
-                response = prover.generate(
-                    prompt,
-                    max_new_tokens=gen_max_new,
-                    do_sample=True,
-                    temperature=gen_temp,
-                )
-            else:
-                response = prover.generate(
-                    prompt,
-                    max_new_tokens=gen_max_new,
-                    do_sample=False,
-                )
-        if response.startswith(prompt):
-            response = response[len(prompt):].strip()
-        if role == "sneaky":
-            response = enforce_sneaky_incorrect(response, solution_true, math_dataset)
-        response = ensure_final_line(response)
+        def _gen_once(temp: float, do_sample: bool) -> str:
+            with torch.no_grad():
+                if do_sample:
+                    out = prover.generate(
+                        prompt,
+                        max_new_tokens=gen_max_new,
+                        do_sample=True,
+                        temperature=temp,
+                    )
+                else:
+                    out = prover.generate(
+                        prompt,
+                        max_new_tokens=gen_max_new,
+                        do_sample=False,
+                    )
+            if out.startswith(prompt):
+                out = out[len(prompt):].strip()
+            return ensure_final_line(out)
+
+        response_raw = _gen_once(gen_temp, gen_do_sample)
+        raw_correct = math_dataset.check_solution(solution_true, response_raw)
+        response = response_raw
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
 
         is_correct = math_dataset.check_solution(solution_true, response)
-        if debate_rounds > 0:
-            debate_state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
-            f_score = debate_state.aggregated_score
-            verifier_scores = debate_state.verifier_scores
-            debate_transcript = debate_state.get_full_transcript()
-        else:
-            verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
-            debate_transcript = ""
+        if role == "sneaky":
+            _, raw_f_score = ensemble.compute_oversight_score(problem, response_raw, transcript="")
+        verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
 
         role_aligned = is_correct if role == "helpful" else not is_correct
         r = reward_function(f_score, role_aligned, alpha_1, beta_1, alpha_2, beta_2)
@@ -307,10 +354,16 @@ def collect_prover_experiences(
         if role == "sneaky":
             sneaky_total += 1
             sneaky_f_values.append(float(f_score))
+            if not raw_correct:
+                sneaky_raw_incorrect += 1
+                if raw_f_score >= fool_threshold:
+                    sneaky_raw_fooled += 1
             if not is_correct:
-                sneaky_incorrect += 1
+                sneaky_final_incorrect += 1
                 if f_score >= fool_threshold:
-                    sneaky_fooled += 1
+                    sneaky_final_fooled += 1
+            if raw_correct and (not is_correct):
+                sneaky_forced_flip += 1
         else:
             helpful_f_values.append(float(f_score))
 
@@ -321,7 +374,6 @@ def collect_prover_experiences(
             problem=problem, solution_true=solution_true, response=response,
             correctness=1.0 if is_correct else 0.0,
             verifier_scores=verifier_scores,
-            debate_transcript=debate_transcript,
             oversight_score=f_score, role=role, round_generated=round_idx,
         ))
         if (ep + 1) % 10 == 0:
@@ -336,8 +388,11 @@ def collect_prover_experiences(
     helpful_f_mean = sum(helpful_f_values) / max(1, len(helpful_f_values))
     print(
         f"Collection diagnostics: FINAL format {final_line_count}/{num_episodes} "
-        f"({final_rate:.2%}), sneaky incorrect {sneaky_incorrect}/{max(1, sneaky_total)}, "
-        f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}, "
+        f"({final_rate:.2%}), sneaky raw incorrect {sneaky_raw_incorrect}/{max(1, sneaky_total)}, "
+        f"sneaky raw fooled@{fool_threshold:.2f} {sneaky_raw_fooled}/{max(1, sneaky_total)}, "
+        f"sneaky final incorrect {sneaky_final_incorrect}/{max(1, sneaky_total)}, "
+        f"sneaky final fooled@{fool_threshold:.2f} {sneaky_final_fooled}/{max(1, sneaky_total)}, "
+        f"sneaky forced flips {sneaky_forced_flip}/{max(1, sneaky_total)}, "
         f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f})"
     )
 

@@ -14,15 +14,16 @@ training:
   rounds: 10
   mu_0: 0.5
   bootstrap_episodes: 50
+  bootstrap_oracle_episodes: 50
   collect_episodes: 50
   max_buffer_size: 5000
-  debate_rounds: 0
   oversight_rule: "supervised"
   verifier_lr: 1.0e-4
   verifier_epochs: 3
   verifier_batch_size: 4
   verifier_max_length: 512
   phase1_micro_step: true
+  phase1_balance_labels: true
   verifier_dropout: 0.0
   softmin_beta: 5.0
   prover_lr: 1.0e-5
@@ -37,8 +38,8 @@ training:
   sneaky_temperature: 0.9
   sneaky_max_new_tokens: 768
   ppo_max_length: 1024
-  alpha_1: 2.0
+  alpha_1: 1.0
   beta_1: 1.0
-  alpha_2: 0.0
-  beta_2: -1.0
+  alpha_2: -0.5
+  beta_2: 0.25
   sneaky_fool_threshold: 0.5

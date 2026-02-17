@@ -21,7 +21,7 @@ import yaml
 
 from pmv.ensemble import VerifierEnsemble
 from pmv.checkpointing import load_checkpoint
-from pmv.prover import Prover, create_role_prompt, enforce_sneaky_incorrect, ensure_final_line
+from pmv.prover import Prover, create_role_prompt, ensure_final_line
 from pmv.utils import cleanup_memory
 
 
@@ -45,11 +45,7 @@ def _compute_scores(
     ensemble: VerifierEnsemble,
     problem: str,
     response: str,
-    debate_rounds: int,
 ) -> Tuple[List[float], float]:
-    if debate_rounds > 0:
-        state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
-        return state.verifier_scores or [0.5] * ensemble.num_verifiers, float(state.aggregated_score or 0.5)
     scores, f = ensemble.compute_oversight_score(problem, response, transcript="")
     return scores, float(f)
 
@@ -60,7 +56,6 @@ def main():
     parser.add_argument("--episodes", type=int, default=80)
     parser.add_argument("--balanced-roles", action="store_true", default=True)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--debate-rounds", type=int, default=None)
     parser.add_argument("--dataset", choices=["auto", "math", "zebra"], default="auto")
     parser.add_argument("--zebra-max-size", type=str, default=None)
     parser.add_argument("--fool-threshold", type=float, default=None)
@@ -78,7 +73,6 @@ def main():
     train_cfg = config.get("training", {})
     model_cfg = config.get("model", {})
 
-    debate_rounds = int(args.debate_rounds) if args.debate_rounds is not None else int(train_cfg.get("debate_rounds", 0))
     fool_threshold = float(args.fool_threshold) if args.fool_threshold is not None else float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_do_sample = bool(train_cfg.get("helpful_do_sample", False))
     sneaky_do_sample = bool(train_cfg.get("sneaky_do_sample", True))
@@ -144,14 +138,12 @@ def main():
             raw_response = raw_response[len(prompt):].strip()
         raw_response = ensure_final_line(raw_response)
         raw_correct = bool(dataset.check_solution(solution_true, raw_response))
-        raw_scores, raw_f = _compute_scores(ensemble, problem, raw_response, debate_rounds)
+        raw_scores, raw_f = _compute_scores(ensemble, problem, raw_response)
 
         final_response = raw_response
-        if role == "sneaky":
-            final_response = enforce_sneaky_incorrect(raw_response, solution_true, dataset)
-            final_response = ensure_final_line(final_response)
+        final_response = ensure_final_line(final_response)
         final_correct = bool(dataset.check_solution(solution_true, final_response))
-        final_scores, final_f = _compute_scores(ensemble, problem, final_response, debate_rounds)
+        final_scores, final_f = _compute_scores(ensemble, problem, final_response)
 
         rec = {
             "episode": ep + 1,
@@ -191,7 +183,6 @@ def main():
         "config": args.config,
         "checkpoint_used": checkpoint_used,
         "episodes": args.episodes,
-        "debate_rounds": debate_rounds,
         "fool_threshold": fool_threshold,
         "helpful_correctness": _safe_rate(helpful_correct, helpful_total),
         "counts": {
@@ -235,7 +226,6 @@ def main():
         "## Summary",
         f"- Config: `{args.config}`",
         f"- Episodes: {args.episodes}",
-        f"- Debate rounds: {debate_rounds}",
         f"- Helpful correctness: {summary['helpful_correctness']:.3f}",
         f"- Sneaky raw incorrect rate: {summary['rates']['sneaky_raw_incorrect_rate']:.3f}",
         f"- Sneaky post-enforce incorrect rate: {summary['rates']['sneaky_post_incorrect_rate']:.3f}",

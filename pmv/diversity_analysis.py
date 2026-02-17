@@ -52,7 +52,7 @@ import numpy as np
 
 from pmv.data import MathDataset
 from pmv.ensemble import VerifierEnsemble
-from pmv.prover import Prover, create_role_prompt, enforce_sneaky_incorrect
+from pmv.prover import Prover, create_role_prompt
 from pmv.utils import get_available_gpus, cleanup_memory
 
 
@@ -264,7 +264,6 @@ def collect_evaluation_data(
     prover: Prover,
     dataset,
     num_episodes: int = 200,
-    debate_rounds: int = 0,
 ) -> Dict:
     """Run prover + verifiers on a test set, collect all scores and correctness."""
     all_verifier_scores = []
@@ -281,15 +280,11 @@ def collect_evaluation_data(
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        if role == "sneaky":
-            response = enforce_sneaky_incorrect(response, solution_true, dataset)
 
         is_correct = dataset.check_solution(solution_true, response)
         c = 1.0 if is_correct else 0.0
 
-        state = ensemble.run_debate(problem, response, num_rounds=debate_rounds)
-        v_scores = state.verifier_scores or [0.5] * ensemble.num_verifiers
-        f_score = state.aggregated_score or 0.5
+        v_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
 
         all_verifier_scores.append(v_scores)
         oversight_scores.append(f_score)
@@ -323,7 +318,6 @@ def collect_evaluation_data(
 def analyze_single_config(
     config_path: str,
     num_episodes: int,
-    debate_rounds: int,
     dataset=None,
 ) -> Dict:
     with open(config_path) as f:
@@ -349,7 +343,7 @@ def analyze_single_config(
 
     data = collect_evaluation_data(
         ensemble, prover, dataset,
-        num_episodes=num_episodes, debate_rounds=debate_rounds,
+        num_episodes=num_episodes,
     )
 
     results = {"config": config_path, "num_verifiers": num_verifiers}
@@ -417,7 +411,6 @@ def main():
     )
     parser.add_argument("configs", nargs="+", help="Config YAML path(s)")
     parser.add_argument("--num-episodes", type=int, default=200)
-    parser.add_argument("--debate-rounds", type=int, default=0)
     parser.add_argument("--dataset", choices=["math", "zebra"], default="math")
     parser.add_argument("--zebra-max-size", type=str, default=None,
                         help="Max puzzle size for ZebraLogic, e.g. 4*4")
@@ -439,7 +432,7 @@ def main():
     all_results = []
     for cfg in args.configs:
         result = analyze_single_config(
-            cfg, args.num_episodes, args.debate_rounds, dataset,
+            cfg, args.num_episodes, dataset,
         )
         all_results.append(result)
 

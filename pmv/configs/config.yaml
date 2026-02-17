@@ -16,12 +16,12 @@ training:
   rounds: 10
   mu_0: 0.5                    # Prior P(τ=H), fixed at 1/2 during training (Section 5)
   bootstrap_episodes: 50
+  bootstrap_oracle_episodes: 50 # Add guaranteed-correct helpful examples to avoid label collapse early
   collect_episodes: 50
   max_buffer_size: 5000        # Replay buffer capacity (Section 6.4)
   save_checkpoints: true
   checkpoint_every: 1
   checkpoint_root: "results/checkpoints"
-  debate_rounds: 0             # Set to 0 for theory-aligned phi_j(x,y) scoring
 
   # Phase 1: Nash update (Algorithm 3)
   oversight_rule: "supervised"  # Options: supervised, pe_min, pe_margin, softmin, average, median, min, max
@@ -30,6 +30,7 @@ training:
   verifier_batch_size: 4
   verifier_max_length: 512
   phase1_micro_step: true
+  phase1_balance_labels: true
   verifier_dropout: 0.0        # Dropout p for SoftMin mask (Appendix D)
   softmin_beta: 5.0            # Temperature β for SoftMin utility
 
@@ -48,8 +49,8 @@ training:
   ppo_max_length: 1024
 
   # Reward function (Equation 4)
-  alpha_1: 2.0
+  alpha_1: 1.0
   beta_1: 1.0
-  alpha_2: 0.0
-  beta_2: -1.0
+  alpha_2: -0.5
+  beta_2: 0.25
   sneaky_fool_threshold: 0.5

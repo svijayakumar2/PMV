@@ -10,6 +10,7 @@ Key structural decisions from the paper:
 
 import sys
 import os
+import json
 import random
 import torch
 import yaml
@@ -21,7 +22,6 @@ from pmv.checkpointing import save_checkpoint
 from pmv.prover import (
     Prover,
     create_role_prompt,
-    enforce_sneaky_incorrect,
     ensure_final_line,
 )
 from pmv.training import (
@@ -47,6 +47,37 @@ def get_dataset(config: dict):
         )
 
 
+def _build_oracle_response(dataset, solution_true: str):
+    """
+    Construct a response string that the dataset checker accepts as correct.
+    Returns None if no candidate can be verified as correct.
+    """
+    candidates = []
+
+    # Generic answer-first candidates.
+    candidates.append(f"FINAL: {solution_true}")
+    candidates.append(str(solution_true))
+
+    # ZebraLogic often provides a JSON object with `rows`.
+    try:
+        parsed = json.loads(solution_true)
+        if isinstance(parsed, dict) and "rows" in parsed:
+            rows_json = json.dumps(parsed["rows"])
+            candidates.insert(0, f"FINAL: {rows_json}")
+            candidates.insert(1, rows_json)
+    except Exception:
+        pass
+
+    for cand in candidates:
+        text = ensure_final_line(cand)
+        try:
+            if dataset.check_solution(solution_true, text):
+                return text
+        except Exception:
+            continue
+    return None
+
+
 def main(config_path: str = "configs/config.yaml"):
     cleanup_memory()
 
@@ -60,9 +91,7 @@ def main(config_path: str = "configs/config.yaml"):
     model_cfg = config["model"]
     train_cfg = config["training"]
     sneaky_fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
-    debate_rounds = int(train_cfg.get("debate_rounds", 0))
     print(f"Oversight rule: {train_cfg.get('oversight_rule', 'supervised')}")
-    print(f"Debate rounds: {debate_rounds} ({'enabled' if debate_rounds > 0 else 'disabled'})")
 
     dataset = get_dataset(config)
     save_checkpoints = bool(train_cfg.get("save_checkpoints", True))
@@ -99,6 +128,7 @@ def main(config_path: str = "configs/config.yaml"):
     )
 
     num_bootstrap = int(train_cfg.get("bootstrap_episodes", 50))
+    bootstrap_oracle_episodes = int(train_cfg.get("bootstrap_oracle_episodes", 0))
     mu_0 = float(train_cfg.get("mu_0", 0.5))
     print(f"\nGenerating {num_bootstrap} bootstrap solutions...")
 
@@ -110,8 +140,6 @@ def main(config_path: str = "configs/config.yaml"):
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        if role == "sneaky":
-            response = enforce_sneaky_incorrect(response, solution_true, dataset)
         response = ensure_final_line(response)
         is_correct = dataset.check_solution(solution_true, response)
         replay_buffer.add(SolutionRecord(
@@ -120,6 +148,27 @@ def main(config_path: str = "configs/config.yaml"):
         ))
         if (i + 1) % 20 == 0:
             print(f"  Bootstrap {i+1}/{num_bootstrap}")
+
+    if bootstrap_oracle_episodes > 0:
+        print(f"Adding {bootstrap_oracle_episodes} oracle-correct bootstrap records...")
+        added = 0
+        for i in range(bootstrap_oracle_episodes):
+            problem, solution_true = dataset.sample()
+            oracle_response = _build_oracle_response(dataset, solution_true)
+            if oracle_response is None:
+                continue
+            replay_buffer.add(SolutionRecord(
+                problem=problem,
+                solution_true=solution_true,
+                response=oracle_response,
+                correctness=1.0,
+                role="helpful",
+                round_generated=0,
+            ))
+            added += 1
+            if (i + 1) % 20 == 0:
+                print(f"  Oracle bootstrap {i+1}/{bootstrap_oracle_episodes}")
+        print(f"Oracle bootstrap added: {added}/{bootstrap_oracle_episodes}")
 
     prover.delete()
     del prover

@@ -42,7 +42,6 @@ python3 -u -m pmv.diversity_analysis \
     configs/experiments/config_max.yaml \
     configs/experiments/config_softmin.yaml \
     --num-episodes 200 \
-    --debate-rounds 0 \
     --dataset "${DATASET}" \
     --output "results/diversity_${DATASET}.json"
 

@@ -38,7 +38,6 @@ cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
 python3 -u -m pmv.adversarial_test "${CONFIG}" \
     --num-episodes 100 \
-    --debate-rounds 0 \
     --output "results/adversarial_${EXPERIMENT}.json"
 
 echo ""

@@ -1,12 +1,8 @@
 """
-Verifier ensemble: manages m verifiers, the aggregator, and optional debate.
+Verifier ensemble: manages m verifiers and the oversight aggregator.
 
 Verifiers PERSIST across rounds (Section 6.4). Only the prover resets.
-
-Debate integration (optional Irving 2018 path):
-  1. Verifiers debate in rounds, building a shared transcript.
-  2. After debate, each verifier computes debate-conditioned score.
-  3. Aggregator (or fixed rule) combines scores into oversight signal.
+This implementation uses direct scoring only (no debate step).
 """
 
 import torch
@@ -16,7 +12,6 @@ from pmv.verifier import DebatingVerifier, ROLES
 from pmv.oversight import (
     OversightAggregator, FIXED_RULES,
 )
-from pmv.data import DebateState
 from pmv.utils import cleanup_memory
 
 
@@ -79,31 +74,7 @@ class VerifierEnsemble:
         self.verifiers = []
         cleanup_memory()
 
-    # ---- debate + scoring ------------------------------------------------
-
-    def run_debate(
-        self, problem: str, solution: str, num_rounds: int = 2,
-    ) -> DebateState:
-        """Irving-style debate followed by debate-conditioned scoring."""
-        state = DebateState(problem=problem, solution=solution)
-        for rd in range(num_rounds):
-            for v in self.verifiers:
-                msg = v.generate_assessment(problem, solution, state, rd)
-                state.messages.append(msg)
-                cleanup_memory()
-            if self._check_consensus(state):
-                break
-
-        transcript = state.get_full_transcript()
-        scores = []
-        for v in self.verifiers:
-            s = v.compute_score(problem, solution, transcript=transcript, training=False, use_head=True)
-            scores.append(float(s.item()))
-            cleanup_memory()
-
-        state.verifier_scores = scores
-        state.aggregated_score = self._aggregate_scores(scores)
-        return state
+    # ---- scoring ---------------------------------------------------------
 
     def compute_oversight_score(
         self, problem: str, solution: str, transcript: str = "",
@@ -140,16 +111,6 @@ class VerifierEnsemble:
         rule_fn = FIXED_RULES[self.oversight_rule]
         t = torch.tensor(scores, dtype=torch.float32)
         return float(rule_fn(t).item())
-
-    def _check_consensus(self, state: DebateState, threshold: float = 0.9) -> bool:
-        latest = {}
-        for msg in state.messages:
-            latest[msg.verifier_id] = msg
-        if len(latest) < 2:
-            return False
-        assessments = [m.assessment for m in latest.values()]
-        confidences = [m.confidence for m in latest.values()]
-        return len(set(assessments)) == 1 and all(c > threshold for c in confidences)
 
     # ---- freeze / unfreeze -----------------------------------------------
 

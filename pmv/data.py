@@ -8,7 +8,7 @@ ZebraLogicDataset is in pmv/zebra_logic.py.
 import re
 import random
 from typing import List, Tuple, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import sympy
 from sympy.parsing.latex import parse_latex
@@ -27,7 +27,6 @@ class SolutionRecord:
     correctness: float          # c(x,y): 1.0 correct, 0.0 incorrect
     verifier_scores: Optional[List[float]] = None
     oversight_score: Optional[float] = None
-    debate_transcript: Optional[str] = None  # full debate transcript for training
     role: str = "helpful"       # tau in {helpful, sneaky}
     round_generated: int = 0
 
@@ -61,49 +60,6 @@ class ReplayBuffer:
 
     def __len__(self) -> int:
         return len(self.records)
-
-
-# ---------------------------------------------------------------------------
-# Debate state (Irving 2018)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class DebateMessage:
-    verifier_id: int
-    round: int
-    assessment: str
-    confidence: float
-    argument: str
-    critique: Optional[str] = None
-
-
-@dataclass
-class DebateState:
-    problem: str
-    solution: str
-    messages: List[DebateMessage] = field(default_factory=list)
-    verifier_scores: Optional[List[float]] = None
-    aggregated_score: Optional[float] = None
-
-    def get_transcript(self, exclude_verifier: Optional[int] = None) -> str:
-        if not self.messages:
-            return "No previous debate messages."
-        parts = []
-        for msg in self.messages:
-            if exclude_verifier is not None and msg.verifier_id == exclude_verifier:
-                continue
-            part = (
-                f"Verifier {msg.verifier_id} (Round {msg.round}): "
-                f"Assessment: {msg.assessment} (confidence: {msg.confidence:.2f})\n"
-                f"Argument: {msg.argument}"
-            )
-            if msg.critique:
-                part += f"\nCritique: {msg.critique}"
-            parts.append(part)
-        return "\n\n".join(parts) if parts else "No other verifier messages yet."
-
-    def get_full_transcript(self) -> str:
-        return self.get_transcript(exclude_verifier=None)
 
 
 # ---------------------------------------------------------------------------

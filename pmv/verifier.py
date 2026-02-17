@@ -1,11 +1,10 @@
 """
-Debating verifier built on the Model base class.
+Verifier built on the Model base class.
 
 Implements ϕ_j: X × Y → [0,1] (Section 3) with:
   - LoRA adapters for parameter-efficient multi-verifier training
   - Score head for differentiable oversight (Phase 1 gradient flow)
   - Generation-based scoring for evaluation
-  - Irving 2018 debate: NL assessments conditioned on transcript
 
 Verifiers PERSIST across rounds (Section 6.4).
 """
@@ -13,7 +12,7 @@ Verifiers PERSIST across rounds (Section 6.4).
 import re
 import torch
 import torch.nn as nn
-from typing import List, Tuple, Optional
+from typing import List
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -23,7 +22,6 @@ from peft import (
 )
 
 from pmv.models.base import Model
-from pmv.data import DebateMessage, DebateState
 from pmv.utils import delete_model, cleanup_memory
 
 
@@ -58,7 +56,7 @@ class DebatingVerifier(Model):
     Verifier model implementing ϕ_j: X × Y → [0,1].
 
     Inherits from Model for quantization, tokenizer, and generation.
-    Adds LoRA adapters, a score head, and debate capabilities.
+    Adds LoRA adapters and a score head.
 
     Two scoring modes (matches your original Verifier interface):
       1. Head-based (differentiable): score_head on hidden states, for Phase 1
@@ -85,7 +83,6 @@ class DebatingVerifier(Model):
         self.verifier_type = role
         self.role_name = role_info["name"]
         self.focus = role_info["focus"]
-        # Debate transcripts are long; 512 tokens was aggressively truncating context.
         self.score_max_length = 1024
 
         # Apply LoRA
@@ -219,57 +216,6 @@ class DebatingVerifier(Model):
         else:
             return self.score_with_generation(problem, solution, transcript)
 
-    # ---- debate (Irving 2018) --------------------------------------------
-
-    def generate_assessment(
-        self,
-        problem: str,
-        solution: str,
-        debate_state: DebateState,
-        debate_round: int,
-        max_tokens: int = 256,
-    ) -> DebateMessage:
-        history = debate_state.get_transcript(exclude_verifier=self.verifier_id)
-        my_prev = [m for m in debate_state.messages if m.verifier_id == self.verifier_id]
-        prev_stance = ""
-        if my_prev:
-            prev_stance = (
-                f"\nYour previous assessment: {my_prev[-1].assessment} "
-                f"(confidence: {my_prev[-1].confidence:.2f})"
-            )
-
-        if debate_round == 0:
-            prompt = (
-                f"You are Verifier {self.verifier_id}, a {self.role_name}.\n"
-                f"{self.focus}\n\n"
-                f"Problem: {problem}\n\nProposed Solution:\n{solution}\n\n"
-                f"Evaluate this solution according to your role.\n"
-                f"Format:\nASSESSMENT: [CORRECT/INCORRECT]\n"
-                f"CONFIDENCE: [0.0-1.0]\nARGUMENT: [Your reasoning]\n"
-            )
-        else:
-            prompt = (
-                f"You are Verifier {self.verifier_id}, participating in a debate.\n"
-                f"{self.focus}\n\n"
-                f"Problem: {problem}\n\nProposed Solution:\n{solution}\n\n"
-                f"=== DEBATE HISTORY ===\n{history}\n{prev_stance}\n\n"
-                f"Consider other verifiers' arguments. You may maintain or change your position.\n"
-                f"Format:\nASSESSMENT: [CORRECT/INCORRECT]\nCONFIDENCE: [0.0-1.0]\n"
-                f"ARGUMENT: [Your reasoning]\nCRITIQUE: [Critique or \"None\"]\n"
-            )
-
-        response = self.generate(prompt, max_new_tokens=max_tokens, do_sample=True, temperature=0.7)
-        if response.startswith(prompt):
-            response = response[len(prompt):]
-        response = response.strip()
-        assessment, confidence, argument = self._parse_assessment(response)
-        critique = self._parse_critique(response) if debate_round > 0 else None
-        return DebateMessage(
-            verifier_id=self.verifier_id, round=debate_round,
-            assessment=assessment, confidence=confidence,
-            argument=argument, critique=critique,
-        )
-
     # ---- prompt construction ---------------------------------------------
 
     def _create_verification_prompt(
@@ -382,82 +328,3 @@ class DebatingVerifier(Model):
             if score <= 10.0:
                 return max(0.0, min(1.0, score / 10.0))
         raise ValueError(f"Could not parse score from: {text[:200]}")
-
-    @staticmethod
-    def _parse_confidence(text: str) -> Optional[float]:
-        """Parse confidence from a CONFIDENCE: line. Returns None on failure."""
-        # Strip the label itself (handles "CONFIDENCE:", "CONFIDENCE :", etc.)
-        val_part = re.sub(r'^CONFIDENCE\s*:\s*', '', text.strip(), flags=re.IGNORECASE)
-        # Percentage: "85%" -> 0.85
-        pct = re.search(r'(\d+(?:\.\d+)?)\s*%', val_part)
-        if pct:
-            return max(0.0, min(1.0, float(pct.group(1)) / 100.0))
-        # Bracketed or plain number: "[0.7]", "0.7", "0.85"
-        num = re.search(r'\[?\s*(\d+(?:\.\d+)?)\s*\]?', val_part)
-        if num:
-            v = float(num.group(1))
-            # If someone writes "85" (no decimal, > 1), treat as percentage
-            if v > 1.0 and v <= 100.0 and '.' not in num.group(1):
-                v = v / 100.0
-            return max(0.0, min(1.0, v))
-        # Prose fallback: "high" -> 0.85, "medium" -> 0.5, "low" -> 0.2
-        low = val_part.lower()
-        if any(w in low for w in ("very high", "extremely")):
-            return 0.95
-        if "high" in low:
-            return 0.85
-        if any(w in low for w in ("moderate", "medium")):
-            return 0.5
-        if "low" in low:
-            return 0.2
-        return None
-
-    @staticmethod
-    def _parse_assessment(response: str) -> Tuple[str, float, str]:
-        assessment, confidence, argument = "incorrect", 0.5, response
-        for line in response.split("\n"):
-            s = line.strip()
-            up = s.upper()
-            if up.startswith("ASSESSMENT"):
-                # Handle "ASSESSMENT:", "ASSESSMENT :", "Assessment: ..."
-                val = re.sub(r'^ASSESSMENT\s*:\s*', '', s, flags=re.IGNORECASE).upper()
-                if "INCORRECT" in val or "WRONG" in val or "FALSE" in val:
-                    assessment = "incorrect"
-                elif "CORRECT" in val or "RIGHT" in val or "TRUE" in val:
-                    assessment = "correct"
-            elif up.startswith("CONFIDENCE"):
-                parsed = DebatingVerifier._parse_confidence(s)
-                if parsed is not None:
-                    confidence = parsed
-        arg_lines, in_arg = [], False
-        for line in response.split("\n"):
-            up = line.upper().strip()
-            if up.startswith("ARGUMENT"):
-                in_arg = True
-                rest = re.sub(r'^ARGUMENT\s*:\s*', '', line.strip(), count=1, flags=re.IGNORECASE)
-                if rest:
-                    arg_lines.append(rest)
-            elif up.startswith(("CRITIQUE", "ASSESSMENT", "CONFIDENCE")):
-                in_arg = False
-            elif in_arg:
-                arg_lines.append(line)
-        if arg_lines:
-            argument = "\n".join(arg_lines).strip()
-        return assessment, confidence, argument
-
-    @staticmethod
-    def _parse_critique(response: str) -> Optional[str]:
-        lines, in_crit = [], False
-        for line in response.split("\n"):
-            up = line.upper().strip()
-            if up.startswith("CRITIQUE"):
-                in_crit = True
-                rest = re.sub(r'^CRITIQUE\s*:\s*', '', line.strip(), count=1, flags=re.IGNORECASE)
-                if rest and rest.lower() != "none":
-                    lines.append(rest)
-            elif in_crit:
-                if up.startswith(("ASSESSMENT", "CONFIDENCE", "ARGUMENT")):
-                    break
-                lines.append(line)
-        text = "\n".join(lines).strip()
-        return text if text and text.lower() != "none" else None
