@@ -104,6 +104,9 @@ def _load_row(path: Path) -> Optional[Dict]:
     scorecard = data.get("scorecard", {})
     adversarial = data.get("adversarial_tests", {})
 
+    prover_model = snap.get("prover_model") or "unknown_prover"
+    verifier_model = snap.get("verifier_model") or "unknown_verifier"
+
     row = {
         "source_file": str(path),
         "timestamp_utc": run_meta.get("timestamp_utc"),
@@ -111,6 +114,12 @@ def _load_row(path: Path) -> Optional[Dict]:
         "config_stem": run_meta.get("config_stem"),
         "ablation_id": run_meta.get("ablation_id"),
         "ablation_tag": run_meta.get("ablation_tag"),
+        "prover_model": prover_model,
+        "verifier_model": verifier_model,
+        "model_pair": f"{prover_model} -> {verifier_model}",
+        "use_quantization": snap.get("use_quantization"),
+        "dataset_mode": snap.get("dataset_mode"),
+        "resolved_dataset": snap.get("resolved_dataset"),
         "num_verifiers": snap.get("num_verifiers"),
         "oversight_rule": snap.get("oversight_rule"),
         "phase1_stratified_batches": snap.get("phase1_stratified_batches"),
@@ -164,6 +173,12 @@ def _write_csv(rows: List[Dict], path: Path) -> None:
         "config_stem",
         "ablation_id",
         "ablation_tag",
+        "prover_model",
+        "verifier_model",
+        "model_pair",
+        "use_quantization",
+        "dataset_mode",
+        "resolved_dataset",
         "num_verifiers",
         "oversight_rule",
         "phase1_stratified_batches",
@@ -235,6 +250,8 @@ def _build_run_rows(rows: List[Dict]) -> List[List[str]]:
                 str(r.get("job_id", "-")),
                 str(r.get("ablation_id") or r.get("config_stem") or "-"),
                 str(r.get("ablation_tag") or "-"),
+                str(r.get("prover_model") or "-"),
+                str(r.get("verifier_model") or "-"),
                 str(r.get("num_verifiers", "-")),
                 str(r.get("oversight_rule", "-")),
                 _pct(_safe_float(r.get("helpful_correctness"))),
@@ -292,6 +309,8 @@ def main():
         "job_id",
         "ablation_id",
         "ablation_tag",
+        "prover_model",
+        "verifier_model",
         "num_verifiers",
         "oversight_rule",
         "helpful_correctness",
@@ -325,6 +344,9 @@ def main():
     lines.append("## Grouped by Oversight Rule")
     lines.append("")
     lines.append(_md_table(group_headers, _build_group_summary(rows, "oversight_rule")))
+    lines.append("## Grouped by Model Pair (Prover | Verifier)")
+    lines.append("")
+    lines.append(_md_table(group_headers, _build_group_summary(rows, "model_pair")))
     lines.append("## Per-Run Table")
     lines.append("")
     lines.append(_md_table(run_headers, _build_run_rows(rows)))

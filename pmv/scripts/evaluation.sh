@@ -64,6 +64,13 @@ mkdir -p results results/evals
 if [ "${REQUIRE_CHECKPOINT}" = "1" ] && [ ! -f "${CHECKPOINT}" ]; then
   echo "Required checkpoint not found: ${CHECKPOINT}"
   echo "Run training first, or pass REQUIRE_CHECKPOINT=0."
+  echo ""
+  echo "Available latest checkpoints (if any):"
+  if [ -d "results/checkpoints" ]; then
+    ls -1 results/checkpoints/*_latest.pt 2>/dev/null || echo "  (none)"
+  else
+    echo "  results/checkpoints directory does not exist yet."
+  fi
   exit 1
 fi
 
