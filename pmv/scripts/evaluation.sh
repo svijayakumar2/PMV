@@ -25,7 +25,16 @@ DATASET=${DATASET:-auto}
 ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 PROBE_EPISODES=${PROBE_EPISODES:-120}
 ATTACK_EPISODES=${ATTACK_EPISODES:-60}
-OUTPUT=${OUTPUT:-results/eval_${EXPERIMENT}.json}
+ABLATION_ID=${ABLATION_ID:-}
+ABLATION_TAG=${ABLATION_TAG:-}
+SAFE_TAG=$(echo "${ABLATION_TAG}" | tr -cs '[:alnum:]_-' '_' | sed 's/^_//; s/_$//')
+export ABLATION_TAG
+RUN_STAMP=${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}
+TAG_SUFFIX=""
+if [ -n "${SAFE_TAG}" ]; then
+  TAG_SUFFIX="_${SAFE_TAG}"
+fi
+OUTPUT=${OUTPUT:-results/evals/eval_${EXPERIMENT}${TAG_SUFFIX}_${LSB_JOBID:-local}_${RUN_STAMP}.json}
 CHECKPOINT=${CHECKPOINT:-results/checkpoints/config_${EXPERIMENT}_latest.pt}
 REQUIRE_CHECKPOINT=${REQUIRE_CHECKPOINT:-1}
 
@@ -42,13 +51,15 @@ echo "Config: ${CONFIG_PATH}"
 echo "Dataset mode: ${DATASET}"
 echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
+echo "Ablation ID: ${ABLATION_ID}"
+echo "Ablation tag: ${ABLATION_TAG}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "Output: ${OUTPUT}"
 echo ""
 
 cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 
-mkdir -p results
+mkdir -p results results/evals
 
 if [ "${REQUIRE_CHECKPOINT}" = "1" ] && [ ! -f "${CHECKPOINT}" ]; then
   echo "Required checkpoint not found: ${CHECKPOINT}"
@@ -61,9 +72,15 @@ if [ -f "${CHECKPOINT}" ]; then
   CKPT_ARG=(--checkpoint "${CHECKPOINT}")
 fi
 
+ABLATION_ARG=()
+if [ -n "${ABLATION_ID}" ]; then
+  ABLATION_ARG=(--ablation-id "${ABLATION_ID}")
+fi
+
 if [ "${DATASET}" = "zebra" ]; then
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
       "${CKPT_ARG[@]}" \
+      "${ABLATION_ARG[@]}" \
       --dataset zebra \
       --zebra-max-size "${ZEBRA_MAX_SIZE}" \
       --probe-episodes "${PROBE_EPISODES}" \
@@ -72,6 +89,7 @@ if [ "${DATASET}" = "zebra" ]; then
 else
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
       "${CKPT_ARG[@]}" \
+      "${ABLATION_ARG[@]}" \
       --dataset "${DATASET}" \
       --probe-episodes "${PROBE_EPISODES}" \
       --attack-episodes "${ATTACK_EPISODES}" \

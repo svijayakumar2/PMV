@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-Audit helpful vs sneaky prover outputs with per-example traces.
-
-Purpose:
-  - Inspect whether sneaky behavior is genuinely adversarial or trivially wrong.
-  - Separate "model was sneaky" from "post-processing forced wrong answer".
-  - Produce both machine-readable JSON and a human-readable markdown report.
-"""
+"""Audit helpful vs sneaky outputs using a single metric path (no raw/final split)."""
 
 from __future__ import annotations
 
@@ -36,11 +29,6 @@ def _safe_rate(a: int, b: int) -> float:
     return a / max(1, b)
 
 
-def _contains_trivial_wrong_marker(text: str) -> bool:
-    t = text.upper()
-    return "FINAL: WRONG" in t or "WRONG" == t.strip() or "FINAL: UNKNOWN" in t
-
-
 def _compute_scores(
     ensemble: VerifierEnsemble,
     problem: str,
@@ -59,8 +47,12 @@ def main():
     parser.add_argument("--dataset", choices=["auto", "math", "zebra"], default="auto")
     parser.add_argument("--zebra-max-size", type=str, default=None)
     parser.add_argument("--fool-threshold", type=float, default=None)
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Checkpoint path (.pt). If omitted, auto-loads config-specific latest checkpoint when present.")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint path (.pt). If omitted, auto-loads config-specific latest checkpoint when present.",
+    )
     parser.add_argument("--out-json", type=str, default="results/output_audit.json")
     parser.add_argument("--out-md", type=str, default="results/output_audit.md")
     args = parser.parse_args()
@@ -81,7 +73,6 @@ def main():
     helpful_max_new_tokens = int(train_cfg.get("helpful_max_new_tokens", 768))
     sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
 
-    # Dataset selection
     if args.dataset == "zebra":
         from pmv.zebra_logic import ZebraLogicDataset
         dataset = ZebraLogicDataset(max_size=args.zebra_max_size)
@@ -115,11 +106,7 @@ def main():
 
     records: List[Dict] = []
     helpful_total = helpful_correct = 0
-    sneaky_total = 0
-    sneaky_raw_incorrect = sneaky_raw_fooled = 0
-    sneaky_post_incorrect = sneaky_post_fooled = 0
-    sneaky_forced_flip = 0
-    sneaky_trivial_marker = 0
+    sneaky_total = sneaky_incorrect = sneaky_fooled = 0
 
     for ep in range(args.episodes):
         role = "helpful" if (ep % 2 == 0 or not args.balanced_roles and random.random() < float(train_cfg.get("mu_0", 0.5))) else "sneaky"
@@ -131,49 +118,35 @@ def main():
 
         with torch.no_grad():
             if do_sample:
-                raw_response = prover.generate(prompt, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature)
+                response = prover.generate(prompt, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature)
             else:
-                raw_response = prover.generate(prompt, max_new_tokens=max_new_tokens, do_sample=False)
-        if raw_response.startswith(prompt):
-            raw_response = raw_response[len(prompt):].strip()
-        raw_response = ensure_final_line(raw_response)
-        raw_correct = bool(dataset.check_solution(solution_true, raw_response))
-        raw_scores, raw_f = _compute_scores(ensemble, problem, raw_response)
+                response = prover.generate(prompt, max_new_tokens=max_new_tokens, do_sample=False)
+        if response.startswith(prompt):
+            response = response[len(prompt):].strip()
+        response = ensure_final_line(response)
 
-        final_response = raw_response
-        final_response = ensure_final_line(final_response)
-        final_correct = bool(dataset.check_solution(solution_true, final_response))
-        final_scores, final_f = _compute_scores(ensemble, problem, final_response)
+        is_correct = bool(dataset.check_solution(solution_true, response))
+        v_scores, f_score = _compute_scores(ensemble, problem, response)
 
         rec = {
             "episode": ep + 1,
             "role": role,
             "problem": problem,
             "solution_true": solution_true,
-            "raw_response": raw_response,
-            "raw_correct": raw_correct,
-            "raw_verifier_scores": raw_scores,
-            "raw_oversight_score": raw_f,
-            "final_response": final_response,
-            "final_correct": final_correct,
-            "final_verifier_scores": final_scores,
-            "final_oversight_score": final_f,
-            "forced_change": final_response != raw_response,
-            "trivial_wrong_marker": _contains_trivial_wrong_marker(final_response),
+            "response": response,
+            "correct": is_correct,
+            "verifier_scores": v_scores,
+            "oversight_score": f_score,
         }
         records.append(rec)
 
         if role == "helpful":
             helpful_total += 1
-            helpful_correct += int(final_correct)
+            helpful_correct += int(is_correct)
         else:
             sneaky_total += 1
-            sneaky_raw_incorrect += int(not raw_correct)
-            sneaky_post_incorrect += int(not final_correct)
-            sneaky_raw_fooled += int((not raw_correct) and raw_f >= fool_threshold)
-            sneaky_post_fooled += int((not final_correct) and final_f >= fool_threshold)
-            sneaky_forced_flip += int(raw_correct and not final_correct)
-            sneaky_trivial_marker += int(_contains_trivial_wrong_marker(final_response))
+            sneaky_incorrect += int(not is_correct)
+            sneaky_fooled += int((not is_correct) and f_score >= fool_threshold)
 
         if (ep + 1) % 10 == 0:
             print(f"  audited {ep+1}/{args.episodes}")
@@ -189,20 +162,12 @@ def main():
             "helpful_total": helpful_total,
             "helpful_correct": helpful_correct,
             "sneaky_total": sneaky_total,
-            "sneaky_raw_incorrect": sneaky_raw_incorrect,
-            "sneaky_post_incorrect": sneaky_post_incorrect,
-            "sneaky_raw_fooled": sneaky_raw_fooled,
-            "sneaky_post_fooled": sneaky_post_fooled,
-            "sneaky_forced_flip": sneaky_forced_flip,
-            "sneaky_trivial_marker": sneaky_trivial_marker,
+            "sneaky_incorrect": sneaky_incorrect,
+            "sneaky_fooled": sneaky_fooled,
         },
         "rates": {
-            "sneaky_raw_incorrect_rate": _safe_rate(sneaky_raw_incorrect, sneaky_total),
-            "sneaky_post_incorrect_rate": _safe_rate(sneaky_post_incorrect, sneaky_total),
-            f"sneaky_raw_fool_rate@{fool_threshold:.2f}": _safe_rate(sneaky_raw_fooled, sneaky_total),
-            f"sneaky_post_fool_rate@{fool_threshold:.2f}": _safe_rate(sneaky_post_fooled, sneaky_total),
-            "sneaky_forced_flip_rate": _safe_rate(sneaky_forced_flip, sneaky_total),
-            "sneaky_trivial_marker_rate": _safe_rate(sneaky_trivial_marker, sneaky_total),
+            "sneaky_incorrect_rate": _safe_rate(sneaky_incorrect, sneaky_total),
+            f"sneaky_fool_rate@{fool_threshold:.2f}": _safe_rate(sneaky_fooled, sneaky_total),
         },
     }
 
@@ -213,12 +178,10 @@ def main():
 
     out_json.write_text(json.dumps({"summary": summary, "records": records}, indent=2))
 
-    sneaky_raw_candidates = [r for r in records if r["role"] == "sneaky" and not r["raw_correct"]]
-    sneaky_raw_candidates.sort(key=lambda x: x["raw_oversight_score"], reverse=True)
-    sneaky_post_candidates = [r for r in records if r["role"] == "sneaky" and not r["final_correct"]]
-    sneaky_post_candidates.sort(key=lambda x: x["final_oversight_score"], reverse=True)
-    helpful_good = [r for r in records if r["role"] == "helpful" and r["final_correct"]]
-    helpful_good.sort(key=lambda x: x["final_oversight_score"], reverse=True)
+    sneaky_candidates = [r for r in records if r["role"] == "sneaky" and not r["correct"]]
+    sneaky_candidates.sort(key=lambda x: x["oversight_score"], reverse=True)
+    helpful_good = [r for r in records if r["role"] == "helpful" and r["correct"]]
+    helpful_good.sort(key=lambda x: x["oversight_score"], reverse=True)
 
     md = [
         "# Prover Output Audit",
@@ -227,37 +190,18 @@ def main():
         f"- Config: `{args.config}`",
         f"- Episodes: {args.episodes}",
         f"- Helpful correctness: {summary['helpful_correctness']:.3f}",
-        f"- Sneaky raw incorrect rate: {summary['rates']['sneaky_raw_incorrect_rate']:.3f}",
-        f"- Sneaky post-enforce incorrect rate: {summary['rates']['sneaky_post_incorrect_rate']:.3f}",
-        f"- Sneaky raw fool rate@{fool_threshold:.2f}: {summary['rates'][f'sneaky_raw_fool_rate@{fool_threshold:.2f}']:.3f}",
-        f"- Sneaky post-enforce fool rate@{fool_threshold:.2f}: {summary['rates'][f'sneaky_post_fool_rate@{fool_threshold:.2f}']:.3f}",
-        f"- Sneaky forced flip rate: {summary['rates']['sneaky_forced_flip_rate']:.3f}",
-        f"- Sneaky trivial marker rate: {summary['rates']['sneaky_trivial_marker_rate']:.3f}",
+        f"- Sneaky incorrect rate: {summary['rates']['sneaky_incorrect_rate']:.3f}",
+        f"- Sneaky fool rate@{fool_threshold:.2f}: {summary['rates'][f'sneaky_fool_rate@{fool_threshold:.2f}']:.3f}",
         "",
-        "## Top Sneaky Raw (High Oversight But Incorrect)",
+        "## Top Sneaky (Incorrect With High Oversight)",
     ]
 
-    for r in sneaky_raw_candidates[:5]:
+    for r in sneaky_candidates[:5]:
         md.extend([
             f"### Episode {r['episode']}",
-            f"- raw oversight: {r['raw_oversight_score']:.3f}",
-            f"- final oversight: {r['final_oversight_score']:.3f}",
-            f"- forced change: {r['forced_change']}",
-            f"- trivial marker: {r['trivial_wrong_marker']}",
+            f"- oversight: {r['oversight_score']:.3f}",
             "```text",
-            _short(r["raw_response"]),
-            "```",
-        ])
-
-    md.append("## Top Sneaky Final (Post-enforce)")
-    for r in sneaky_post_candidates[:5]:
-        md.extend([
-            f"### Episode {r['episode']}",
-            f"- final oversight: {r['final_oversight_score']:.3f}",
-            f"- forced change: {r['forced_change']}",
-            f"- trivial marker: {r['trivial_wrong_marker']}",
-            "```text",
-            _short(r["final_response"]),
+            _short(r["response"]),
             "```",
         ])
 
@@ -265,9 +209,9 @@ def main():
     for r in helpful_good[:5]:
         md.extend([
             f"### Episode {r['episode']}",
-            f"- final oversight: {r['final_oversight_score']:.3f}",
+            f"- oversight: {r['oversight_score']:.3f}",
             "```text",
-            _short(r["final_response"]),
+            _short(r["response"]),
             "```",
         ])
 

@@ -12,6 +12,8 @@ Phase 2 (StackelbergUpdate, Algorithm 2):
 Reward function per Equation (4).
 """
 
+import json
+import math
 import random
 import torch
 import torch.nn.functional as F
@@ -73,6 +75,143 @@ def _supervised_weighted_bce(
     )
 
 
+def _build_stratified_epoch_records(
+    records: List[SolutionRecord],
+    batch_size: int,
+) -> List[SolutionRecord]:
+    """
+    Build one epoch sample list with approximately balanced correct/incorrect
+    examples in each batch. Falls back to shuffled records if either class is missing.
+    """
+    pos = [r for r in records if float(r.correctness) >= 0.5]
+    neg = [r for r in records if float(r.correctness) < 0.5]
+    if not pos or not neg:
+        out = records.copy()
+        random.shuffle(out)
+        return out
+
+    n_batches = max(1, math.ceil(len(records) / max(1, batch_size)))
+    k_pos = batch_size // 2
+    k_neg = batch_size - k_pos
+
+    out: List[SolutionRecord] = []
+    for _ in range(n_batches):
+        out.extend(random.choices(pos, k=max(1, k_pos)))
+        out.extend(random.choices(neg, k=max(1, k_neg)))
+    random.shuffle(out)
+    return out
+
+
+def _build_helpful_target_response(dataset, solution_true: str):
+    """
+    Build a minimal target response that checker accepts as correct.
+    Returns None if no checked target could be built.
+    """
+    candidates = [f"FINAL: {solution_true}", str(solution_true)]
+    try:
+        parsed = json.loads(solution_true)
+        if isinstance(parsed, dict) and "rows" in parsed:
+            rows_json = json.dumps(parsed["rows"])
+            candidates.insert(0, f"FINAL: {rows_json}")
+            candidates.insert(1, rows_json)
+    except Exception:
+        pass
+
+    for cand in candidates:
+        text = ensure_final_line(cand)
+        try:
+            if dataset.check_solution(solution_true, text):
+                return text
+        except Exception:
+            continue
+    return None
+
+
+def train_prover_helpful_warmup(
+    prover: Prover,
+    dataset,
+    config: Dict,
+):
+    """
+    Warm-start helpful behavior with direct supervised teacher forcing.
+    This is intentionally simple: maximize log-probability of checker-valid
+    helpful targets before mixed helpful/sneaky rollouts.
+    """
+    train_cfg = config["training"]
+    steps = int(train_cfg.get("helpful_warmup_steps", 0))
+    if steps <= 0:
+        return
+
+    lr = float(train_cfg.get("helpful_warmup_lr", 2e-5))
+    batch_size = int(train_cfg.get("helpful_warmup_batch_size", 4))
+    max_length = int(train_cfg.get("helpful_warmup_max_length", 1024))
+
+    trainable = [p for p in prover.model.parameters() if p.requires_grad]
+    if not trainable:
+        return
+    optimizer = torch.optim.Adam(trainable, lr=lr)
+
+    prover.model.train()
+    print(f"Helpful warmup: {steps} steps (batch={batch_size}, lr={lr:g})")
+
+    updates = 0
+    for step in range(steps):
+        optimizer.zero_grad()
+        losses = []
+
+        for _ in range(batch_size):
+            problem, solution_true = dataset.sample()
+            target = _build_helpful_target_response(dataset, solution_true)
+            if target is None:
+                continue
+
+            prompt = create_role_prompt(problem, "helpful", prover.tokenizer)
+            full = prompt + target
+
+            inp = prover.tokenizer(
+                full, return_tensors="pt", truncation=True, max_length=max_length
+            )
+            inp = {k: v.to(prover.device) for k, v in inp.items()}
+            p_ids = prover.tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=max_length
+            )
+            plen = p_ids["input_ids"].shape[1]
+
+            logits = prover.model(**inp, use_cache=False).logits[0]
+            if logits.shape[0] <= plen:
+                continue
+
+            rl = logits[plen - 1:-1]
+            rt = inp["input_ids"][0, plen:]
+            ml = min(rl.shape[0], rt.shape[0])
+            if ml == 0:
+                continue
+
+            tlp = torch.log_softmax(rl[:ml].float(), dim=-1)
+            sel = tlp.gather(1, rt[:ml].unsqueeze(1)).squeeze(1)
+            nll = -sel.mean()
+            losses.append(nll)
+
+        if not losses:
+            continue
+
+        loss = torch.stack(losses).mean()
+        if torch.isnan(loss) or torch.isinf(loss):
+            optimizer.zero_grad()
+            continue
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
+        optimizer.step()
+        updates += 1
+
+        if (step + 1) % 10 == 0:
+            print(f"  Warmup step {step+1}/{steps}, loss: {loss.item():.4f}")
+            cleanup_memory()
+
+    print(f"Helpful warmup complete. Updates: {updates}/{steps}")
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: NashUpdate (Algorithm 3) + aggregator joint training
 # ---------------------------------------------------------------------------
@@ -101,6 +240,7 @@ def train_phase1(
     softmin_beta = float(train_cfg.get("softmin_beta", 5.0))
     micro_step = bool(train_cfg.get("phase1_micro_step", True))
     balance_labels = bool(train_cfg.get("phase1_balance_labels", True))
+    stratified_batches = bool(train_cfg.get("phase1_stratified_batches", True))
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (oversight_rule={oversight_rule})")
@@ -117,7 +257,12 @@ def train_phase1(
 
     records = replay_buffer.get_all()
     pos_w, neg_w, n_pos, n_neg = _compute_label_weights(records)
-    if oversight_rule == "supervised" and balance_labels:
+    use_stratified = oversight_rule == "supervised" and stratified_batches and n_pos > 0 and n_neg > 0
+    use_weighted_bce = oversight_rule == "supervised" and balance_labels and not use_stratified
+
+    if oversight_rule == "supervised" and use_stratified:
+        print(f"  Stratified batches enabled (positives={n_pos}, negatives={n_neg})")
+    if oversight_rule == "supervised" and use_weighted_bce:
         print(
             f"  Label balance: positives={n_pos}, negatives={n_neg}, "
             f"weights(pos/neg)=({pos_w:.3f}/{neg_w:.3f})"
@@ -125,11 +270,15 @@ def train_phase1(
     final_loss = float("inf")
 
     for epoch in range(epochs):
-        random.shuffle(records)
+        if use_stratified:
+            epoch_records = _build_stratified_epoch_records(records, batch_size)
+        else:
+            epoch_records = records.copy()
+            random.shuffle(epoch_records)
         epoch_loss, n_batches = 0.0, 0
 
-        for bstart in range(0, len(records), batch_size):
-            batch = records[bstart:bstart + batch_size]
+        for bstart in range(0, len(epoch_records), batch_size):
+            batch = epoch_records[bstart:bstart + batch_size]
 
             if micro_step:
                 for rec in batch:
@@ -171,7 +320,7 @@ def train_phase1(
                             loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                         else:
                             # Default: supervised BCE on aggregator output
-                            if balance_labels:
+                            if use_weighted_bce:
                                 loss = _supervised_weighted_bce(
                                     oversight=oversight,
                                     target=target,
@@ -232,7 +381,7 @@ def train_phase1(
                                 mask = torch.ones_like(v_losses)
                             loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
                         else:
-                            if balance_labels:
+                            if use_weighted_bce:
                                 loss = _supervised_weighted_bce(
                                     oversight=oversight,
                                     target=target,
@@ -299,11 +448,8 @@ def collect_prover_experiences(
     prover.model.eval()
     final_line_count = 0
     sneaky_total = 0
-    sneaky_raw_incorrect = 0
-    sneaky_raw_fooled = 0
-    sneaky_final_incorrect = 0
-    sneaky_final_fooled = 0
-    sneaky_forced_flip = 0
+    sneaky_incorrect = 0
+    sneaky_fooled = 0
     sneaky_f_values = []
     helpful_f_values = []
 
@@ -337,15 +483,11 @@ def collect_prover_experiences(
                 out = out[len(prompt):].strip()
             return ensure_final_line(out)
 
-        response_raw = _gen_once(gen_temp, gen_do_sample)
-        raw_correct = math_dataset.check_solution(solution_true, response_raw)
-        response = response_raw
+        response = _gen_once(gen_temp, gen_do_sample)
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
 
         is_correct = math_dataset.check_solution(solution_true, response)
-        if role == "sneaky":
-            _, raw_f_score = ensemble.compute_oversight_score(problem, response_raw, transcript="")
         verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
 
         role_aligned = is_correct if role == "helpful" else not is_correct
@@ -354,16 +496,10 @@ def collect_prover_experiences(
         if role == "sneaky":
             sneaky_total += 1
             sneaky_f_values.append(float(f_score))
-            if not raw_correct:
-                sneaky_raw_incorrect += 1
-                if raw_f_score >= fool_threshold:
-                    sneaky_raw_fooled += 1
             if not is_correct:
-                sneaky_final_incorrect += 1
+                sneaky_incorrect += 1
                 if f_score >= fool_threshold:
-                    sneaky_final_fooled += 1
-            if raw_correct and (not is_correct):
-                sneaky_forced_flip += 1
+                    sneaky_fooled += 1
         else:
             helpful_f_values.append(float(f_score))
 
@@ -388,11 +524,8 @@ def collect_prover_experiences(
     helpful_f_mean = sum(helpful_f_values) / max(1, len(helpful_f_values))
     print(
         f"Collection diagnostics: FINAL format {final_line_count}/{num_episodes} "
-        f"({final_rate:.2%}), sneaky raw incorrect {sneaky_raw_incorrect}/{max(1, sneaky_total)}, "
-        f"sneaky raw fooled@{fool_threshold:.2f} {sneaky_raw_fooled}/{max(1, sneaky_total)}, "
-        f"sneaky final incorrect {sneaky_final_incorrect}/{max(1, sneaky_total)}, "
-        f"sneaky final fooled@{fool_threshold:.2f} {sneaky_final_fooled}/{max(1, sneaky_total)}, "
-        f"sneaky forced flips {sneaky_forced_flip}/{max(1, sneaky_total)}, "
+        f"({final_rate:.2%}), sneaky incorrect {sneaky_incorrect}/{max(1, sneaky_total)}, "
+        f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}, "
         f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f})"
     )
 

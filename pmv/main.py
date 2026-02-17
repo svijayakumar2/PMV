@@ -25,7 +25,7 @@ from pmv.prover import (
     ensure_final_line,
 )
 from pmv.training import (
-    train_phase1, collect_prover_experiences, train_prover_ppo,
+    train_phase1, collect_prover_experiences, train_prover_ppo, train_prover_helpful_warmup,
 )
 from pmv.utils import get_available_gpus, cleanup_memory
 
@@ -215,6 +215,12 @@ def main(config_path: str = "configs/config.yaml"):
                 p.requires_grad = False
         else:
             print("PPO reference prover disabled (lower memory mode).")
+
+        train_prover_helpful_warmup(
+            prover=prover,
+            dataset=dataset,
+            config=config,
+        )
 
         prompts, responses, rewards, new_records = collect_prover_experiences(
             prover, ensemble, dataset, config, round_idx,
