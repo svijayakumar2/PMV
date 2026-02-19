@@ -220,9 +220,11 @@ def compute_oversight_quality(
     correct_scores = [s for s, c in zip(oversight_scores, correctness) if c > 0.5]
     incorrect_scores = [s for s, c in zip(oversight_scores, correctness) if c <= 0.5]
 
-    avg_correct = float(np.mean(correct_scores)) if correct_scores else 0.0
-    avg_incorrect = float(np.mean(incorrect_scores)) if incorrect_scores else 0.0
-    separation = avg_correct - avg_incorrect
+    avg_correct = float(np.mean(correct_scores)) if correct_scores else None
+    avg_incorrect = float(np.mean(incorrect_scores)) if incorrect_scores else None
+    separation = None
+    if avg_correct is not None and avg_incorrect is not None:
+        separation = avg_correct - avg_incorrect
 
     # Binary accuracy
     binary_correct = sum(
@@ -249,6 +251,9 @@ def compute_oversight_quality(
         "avg_correct_score": avg_correct,
         "avg_incorrect_score": avg_incorrect,
         "separation": separation,
+        "separation_defined": separation is not None,
+        "n_correct": len(correct_scores),
+        "n_incorrect": len(incorrect_scores),
         "binary_accuracy": accuracy,
         "fool_rate": fool_rate,
         "approx_soundness_eps_0.1": approx_soundness,

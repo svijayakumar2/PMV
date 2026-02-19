@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--episodes", type=int, default=80)
     parser.add_argument("--balanced-roles", action="store_true", default=True)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--dataset", choices=["auto", "math", "zebra"], default="auto")
+    parser.add_argument("--dataset", choices=["auto", "math", "zebra", "gsm8k"], default="auto")
     parser.add_argument("--zebra-max-size", type=str, default=None)
     parser.add_argument("--fool-threshold", type=float, default=None)
     parser.add_argument(
@@ -76,6 +76,9 @@ def main():
     if args.dataset == "zebra":
         from pmv.zebra_logic import ZebraLogicDataset
         dataset = ZebraLogicDataset(max_size=args.zebra_max_size)
+    elif args.dataset == "gsm8k":
+        from pmv.data import GSM8KDataset
+        dataset = GSM8KDataset()
     elif args.dataset == "math":
         from pmv.data import MathDataset
         dataset = MathDataset()

@@ -243,3 +243,47 @@ class MathDataset:
         if self.dataset is None:
             self.download()
         return len(self.train_data) + len(self.test_data)
+
+
+class GSM8KDataset(MathDataset):
+    """
+    GSM8K wrapper for Kirchner-style baseline replication.
+    Uses strict FINAL-line parsing for predicted answers.
+    """
+
+    def __init__(self):
+        super().__init__(num_samples=0)
+
+    def download(self):
+        from datasets import load_dataset
+        print("Downloading GSM8K dataset...")
+        self.dataset = load_dataset("gsm8k", "main")
+        self.train_data = self.dataset["train"]
+        self.test_data = self.dataset["test"]
+        print(f"Train: {len(self.train_data)}, Test: {len(self.test_data)}")
+        return self.dataset
+
+    def _extract_expected(self, answer_text: str) -> str:
+        m = re.search(r"####\s*(.+)$", answer_text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        return answer_text.strip()
+
+    def sample(self) -> Tuple[str, str]:
+        if self.train_data is None:
+            self.download()
+        idx = random.randint(0, len(self.train_data) - 1)
+        item = self.train_data[idx]
+        return item["question"], self._extract_expected(item["answer"])
+
+    def check_solution(self, expected_answer: str, predicted_solution: str) -> bool:
+        try:
+            true_val = self._parse_latex_answer(expected_answer)
+            if true_val is None:
+                return False
+            pred_val = self._parse_answer_from_text(predicted_solution)
+            if pred_val is None:
+                return False
+            return self._compare_answers(true_val, pred_val)
+        except Exception:
+            return False

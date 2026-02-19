@@ -16,7 +16,7 @@ import torch
 import yaml
 from pathlib import Path
 
-from pmv.data import ReplayBuffer, SolutionRecord, MathDataset
+from pmv.data import ReplayBuffer, SolutionRecord, MathDataset, GSM8KDataset
 from pmv.ensemble import VerifierEnsemble
 from pmv.checkpointing import save_checkpoint
 from pmv.prover import (
@@ -41,6 +41,8 @@ def get_dataset(config: dict):
             max_size=ds_cfg.get("max_size"),
             min_size=ds_cfg.get("min_size"),
         )
+    if ds_type == "gsm8k":
+        return GSM8KDataset()
     else:
         return MathDataset(
             num_samples=ds_cfg.get("num_samples", 100000),

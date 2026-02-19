@@ -70,6 +70,13 @@ def _extract_probe_fool_rate(probe_rates: Dict) -> Optional[float]:
     return None
 
 
+def _extract_probe_conditional_fool_rate(probe_rates: Dict) -> Optional[float]:
+    for k, v in probe_rates.items():
+        if isinstance(k, str) and k.startswith("sneaky_conditional_fool_rate@"):
+            return _safe_float(v)
+    return None
+
+
 def _extract_probe_fool_key(probe_rates: Dict) -> str:
     for k in probe_rates.keys():
         if isinstance(k, str) and k.startswith("sneaky_fool_rate@"):
@@ -129,6 +136,7 @@ def _load_row(path: Path) -> Optional[Dict]:
         "sneaky_incorrect_rate": _safe_float(probe.get("sneaky_incorrect_rate")),
         "sneaky_fool_rate_key": _extract_probe_fool_key(probe),
         "sneaky_fool_rate": _extract_probe_fool_rate(probe),
+        "sneaky_conditional_fool_rate": _extract_probe_conditional_fool_rate(probe),
         "final_format_before_fix_rate": _safe_float(probe.get("final_format_before_fix_rate")),
         "mean_helpful_oversight_score": _safe_float(probe.get("mean_helpful_oversight_score")),
         "mean_sneaky_oversight_score": _safe_float(probe.get("mean_sneaky_oversight_score")),
@@ -188,6 +196,7 @@ def _write_csv(rows: List[Dict], path: Path) -> None:
         "sneaky_incorrect_rate",
         "sneaky_fool_rate_key",
         "sneaky_fool_rate",
+        "sneaky_conditional_fool_rate",
         "final_format_before_fix_rate",
         "mean_helpful_oversight_score",
         "mean_sneaky_oversight_score",
@@ -222,6 +231,7 @@ def _build_group_summary(rows: List[Dict], group_key: str) -> List[List[str]]:
         helpful = _collect_numeric(items, "helpful_correctness")
         sneaky_inc = _collect_numeric(items, "sneaky_incorrect_rate")
         sneaky_fool = _collect_numeric(items, "sneaky_fool_rate")
+        sneaky_cond_fool = _collect_numeric(items, "sneaky_conditional_fool_rate")
         sep = _collect_numeric(items, "oversight_separation")
         acc = _collect_numeric(items, "binary_accuracy")
         pass_rate = _mean([1.0 if bool(i.get("overall_pass")) else 0.0 for i in items])
@@ -232,6 +242,7 @@ def _build_group_summary(rows: List[Dict], group_key: str) -> List[List[str]]:
                 f"{_pct(_mean(helpful))} +/- {_pct(_std(helpful))}",
                 f"{_pct(_mean(sneaky_inc))} +/- {_pct(_std(sneaky_inc))}",
                 f"{_pct(_mean(sneaky_fool))} +/- {_pct(_std(sneaky_fool))}",
+                f"{_pct(_mean(sneaky_cond_fool))} +/- {_pct(_std(sneaky_cond_fool))}",
                 f"{_fmt(_mean(sep))} +/- {_fmt(_std(sep))}",
                 f"{_pct(_mean(acc))} +/- {_pct(_std(acc))}",
                 _pct(pass_rate),
@@ -257,6 +268,7 @@ def _build_run_rows(rows: List[Dict]) -> List[List[str]]:
                 _pct(_safe_float(r.get("helpful_correctness"))),
                 _pct(_safe_float(r.get("sneaky_incorrect_rate"))),
                 _pct(_safe_float(r.get("sneaky_fool_rate"))),
+                _pct(_safe_float(r.get("sneaky_conditional_fool_rate"))),
                 _fmt(_safe_float(r.get("oversight_separation"))),
                 _pct(_safe_float(r.get("binary_accuracy"))),
                 str(bool(r.get("overall_pass"))),
@@ -316,6 +328,7 @@ def main():
         "helpful_correctness",
         "sneaky_incorrect_rate",
         "sneaky_fool_rate",
+        "sneaky_conditional_fool_rate",
         "oversight_sep",
         "binary_accuracy",
         "overall_pass",
@@ -326,6 +339,7 @@ def main():
         "helpful_correctness (mean+/-std)",
         "sneaky_incorrect_rate (mean+/-std)",
         "sneaky_fool_rate (mean+/-std)",
+        "sneaky_conditional_fool_rate (mean+/-std)",
         "oversight_separation (mean+/-std)",
         "binary_accuracy (mean+/-std)",
         "overall_pass_rate",
