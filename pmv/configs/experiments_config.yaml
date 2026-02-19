@@ -1,0 +1,150 @@
+# PMV Stackelberg-Nash Experiments Configuration
+#
+# NOTE ON VERIFIER DIVERSITY (Remark 3.1 from paper):
+# Each verifier has a different evaluation focus, implementing the paper's notion
+# that "different verifiers have different notions of how a given concept 
+# (like solution convincingness) should be evaluated."
+#
+# Verifier roles (automatically assigned based on num_verifiers):
+#   - logical_structure: reasoning and logical flow
+#   - computational_accuracy: arithmetic and calculations  
+#   - problem_alignment: solution completeness and relevance
+#   - mathematical_rigor: formula usage and principles
+#   - step_validity: individual step correctness
+#   - error_detection: finding mistakes and edge cases
+#   - clarity: explanation quality
+#
+# When you set num_verifiers=3, you get the first 3 roles.
+# When you set num_verifiers=4, you get the first 4 roles, etc.
+
+base_config:
+  model:
+    prover_name: "meta-llama/Llama-2-7b-chat-hf"
+    verifier_name: "meta-llama/Llama-2-1b-hf"
+    num_verifiers: 3
+  
+  training:
+    rounds: 10
+    max_episodes: 100
+    helpful_prior: 0.5
+    verifier_pretrain_examples: 500
+    pretrain_examples: 100
+    
+    # Nash game params
+    verifier_epochs: 3
+    verifier_lr: 1.0e-5
+    
+    # PE-min aggregator params
+    aggregator_epochs: 10
+    aggregator_lr: 1.0e-4
+    
+    # PPO params
+    ppo_epochs: 4
+    prover_lr: 1.0e-5
+    clip_ratio: 0.2
+    kl_coeff: 0.01
+    
+    # LoRA params
+    use_lora: true
+    lora_r: 8
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+    
+    max_replay_size: 200
+    save_every: 5
+  
+  logging:
+    logdir: "runs/pmv_stackelberg"
+
+# Different experiment configurations
+experiments:
+  # Baseline: standard settings
+  - name: "baseline"
+    description: "Standard PMV Stackelberg-Nash with 3 verifiers"
+    overrides: {}
+  
+  # Vary number of verifiers
+  - name: "2verifiers"
+    description: "PMV with 2 verifiers"
+    overrides:
+      model:
+        num_verifiers: 2
+  
+  - name: "4verifiers"
+    description: "PMV with 4 verifiers"
+    overrides:
+      model:
+        num_verifiers: 4
+  
+  # Vary helpful prior (mu_0)
+  - name: "helpful_prior_0.3"
+    description: "More sneaky provers (mu_0=0.3)"
+    overrides:
+      training:
+        helpful_prior: 0.3
+  
+  - name: "helpful_prior_0.7"
+    description: "More helpful provers (mu_0=0.7)"
+    overrides:
+      training:
+        helpful_prior: 0.7
+  
+  # Vary training intensity
+  - name: "longer_training"
+    description: "More rounds and episodes"
+    overrides:
+      training:
+        rounds: 15
+        max_episodes: 150
+  
+  - name: "more_verifier_training"
+    description: "More verifier epochs"
+    overrides:
+      training:
+        verifier_epochs: 5
+        aggregator_epochs: 15
+  
+  # Vary learning rates
+  - name: "higher_lr"
+    description: "Higher learning rates"
+    overrides:
+      training:
+        verifier_lr: 5.0e-5
+        aggregator_lr: 5.0e-4
+        prover_lr: 5.0e-5
+  
+  - name: "lower_lr"
+    description: "Lower learning rates"
+    overrides:
+      training:
+        verifier_lr: 5.0e-6
+        aggregator_lr: 5.0e-5
+        prover_lr: 5.0e-6
+  
+  # Different model sizes
+  - name: "smaller_models"
+    description: "Smaller models for faster experimentation"
+    overrides:
+      model:
+        prover_name: "meta-llama/Llama-2-7b-chat-hf"
+        verifier_name: "meta-llama/Llama-2-7b-chat-hf"
+  
+  # Test verifier diversity scaling
+  - name: "5verifiers"
+    description: "Test with 5 diverse verifiers"
+    overrides:
+      model:
+        num_verifiers: 5
+  
+  - name: "6verifiers"
+    description: "Test with 6 diverse verifiers"
+    overrides:
+      model:
+        num_verifiers: 6
+  
+  - name: "7verifiers_all_roles"
+    description: "Test with all 7 verifier role types"
+    overrides:
+      model:
+        num_verifiers: 7
