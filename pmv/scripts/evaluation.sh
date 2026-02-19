@@ -25,6 +25,9 @@ DATASET=${DATASET:-auto}
 ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 PROBE_EPISODES=${PROBE_EPISODES:-120}
 ATTACK_EPISODES=${ATTACK_EPISODES:-60}
+PROBE_MAX_NEW_TOKENS=${PROBE_MAX_NEW_TOKENS:-}
+ATTACK_MAX_NEW_TOKENS=${ATTACK_MAX_NEW_TOKENS:-512}
+SKIP_ADVERSARIAL=${SKIP_ADVERSARIAL:-0}
 ABLATION_ID=${ABLATION_ID:-}
 ABLATION_TAG=${ABLATION_TAG:-}
 SAFE_TAG=$(echo "${ABLATION_TAG}" | tr -cs '[:alnum:]_-' '_' | sed 's/^_//; s/_$//')
@@ -51,6 +54,9 @@ echo "Config: ${CONFIG_PATH}"
 echo "Dataset mode: ${DATASET}"
 echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
+echo "Probe max new tokens: ${PROBE_MAX_NEW_TOKENS:-default}"
+echo "Attack max new tokens: ${ATTACK_MAX_NEW_TOKENS}"
+echo "Skip adversarial: ${SKIP_ADVERSARIAL}"
 echo "Ablation ID: ${ABLATION_ID}"
 echo "Ablation tag: ${ABLATION_TAG}"
 echo "Checkpoint: ${CHECKPOINT}"
@@ -84,10 +90,22 @@ if [ -n "${ABLATION_ID}" ]; then
   ABLATION_ARG=(--ablation-id "${ABLATION_ID}")
 fi
 
+PROBE_LEN_ARG=()
+if [ -n "${PROBE_MAX_NEW_TOKENS}" ]; then
+  PROBE_LEN_ARG=(--probe-max-new-tokens "${PROBE_MAX_NEW_TOKENS}")
+fi
+
+ADVERSARIAL_ARG=(--attack-max-new-tokens "${ATTACK_MAX_NEW_TOKENS}")
+if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
+  ADVERSARIAL_ARG+=(--skip-adversarial)
+fi
+
 if [ "${DATASET}" = "zebra" ]; then
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
       "${CKPT_ARG[@]}" \
       "${ABLATION_ARG[@]}" \
+      "${PROBE_LEN_ARG[@]}" \
+      "${ADVERSARIAL_ARG[@]}" \
       --dataset zebra \
       --zebra-max-size "${ZEBRA_MAX_SIZE}" \
       --probe-episodes "${PROBE_EPISODES}" \
@@ -97,6 +115,8 @@ else
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
       "${CKPT_ARG[@]}" \
       "${ABLATION_ARG[@]}" \
+      "${PROBE_LEN_ARG[@]}" \
+      "${ADVERSARIAL_ARG[@]}" \
       --dataset "${DATASET}" \
       --probe-episodes "${PROBE_EPISODES}" \
       --attack-episodes "${ATTACK_EPISODES}" \

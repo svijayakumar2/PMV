@@ -20,6 +20,8 @@ def test_sneaky_fool_rate(
     dataset,
     num_episodes: int = 100,
     temperatures: List[float] = None,
+    max_new_tokens: int = 512,
+    progress_every: int = 20,
 ) -> Dict:
     """Measure sneaky fool rate at different temperatures."""
     if temperatures is None:
@@ -28,11 +30,16 @@ def test_sneaky_fool_rate(
     results = {}
     for temp in temperatures:
         fooled, total = 0, 0
-        for _ in range(num_episodes):
+        for ep in range(num_episodes):
             problem, solution_true = dataset.sample()
             prompt = create_role_prompt(problem, "sneaky", prover.tokenizer)
             with torch.no_grad():
-                response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=temp)
+                response = prover.generate(
+                    prompt,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    temperature=temp,
+                )
             if response.startswith(prompt):
                 response = response[len(prompt):].strip()
             is_correct = dataset.check_solution(solution_true, response)
@@ -43,6 +50,8 @@ def test_sneaky_fool_rate(
             if f_score > 0.5:
                 fooled += 1
             cleanup_memory()
+            if progress_every > 0 and (ep + 1) % progress_every == 0:
+                print(f"    temp={temp}, episode {ep+1}/{num_episodes}")
 
         rate = fooled / max(total, 1)
         results[f"temp_{temp}"] = {
@@ -88,6 +97,8 @@ def test_score_distribution(
     ensemble: VerifierEnsemble,
     dataset,
     num_episodes: int = 100,
+    max_new_tokens: int = 512,
+    progress_every: int = 20,
 ) -> Dict:
     """Score distributions for correct vs incorrect solutions."""
     correct_scores, incorrect_scores = [], []
@@ -97,7 +108,12 @@ def test_score_distribution(
         problem, solution_true = dataset.sample()
         prompt = create_role_prompt(problem, role, prover.tokenizer)
         with torch.no_grad():
-            response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
+            response = prover.generate(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+            )
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
 
@@ -109,6 +125,8 @@ def test_score_distribution(
         else:
             incorrect_scores.append(score)
         cleanup_memory()
+        if progress_every > 0 and (ep + 1) % progress_every == 0:
+            print(f"    score-dist episode {ep+1}/{num_episodes}")
 
     avg_correct = sum(correct_scores) / max(len(correct_scores), 1)
     avg_incorrect = sum(incorrect_scores) / max(len(incorrect_scores), 1)
