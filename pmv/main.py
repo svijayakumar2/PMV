@@ -92,7 +92,11 @@ def main(config_path: str = "configs/config.yaml"):
 
     model_cfg = config["model"]
     train_cfg = config["training"]
+    seed = int(train_cfg.get("seed", 0))
+    random.seed(seed)
+    torch.manual_seed(seed)
     sneaky_fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
+    print(f"Seed: {seed}")
     print(f"Oversight rule: {train_cfg.get('oversight_rule', 'supervised')}")
 
     dataset = get_dataset(config)

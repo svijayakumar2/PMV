@@ -27,7 +27,24 @@ class VerifierEnsemble:
 
         train_cfg = config["training"]
         self.oversight_rule = train_cfg.get("oversight_rule", "supervised")
-        self.verifier_max_length = int(train_cfg.get("verifier_max_length", 512))
+        configured_verifier_max_length = int(train_cfg.get("verifier_max_length", 512))
+        auto_adjust_verifier_max_length = bool(
+            train_cfg.get("auto_adjust_verifier_max_length", True)
+        )
+        if auto_adjust_verifier_max_length:
+            helpful_max_new_tokens = int(train_cfg.get("helpful_max_new_tokens", 768))
+            sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
+            verifier_prompt_margin = int(train_cfg.get("verifier_prompt_margin", 256))
+            required_min_length = max(helpful_max_new_tokens, sneaky_max_new_tokens) + verifier_prompt_margin
+            self.verifier_max_length = max(configured_verifier_max_length, required_min_length)
+            if self.verifier_max_length != configured_verifier_max_length:
+                print(
+                    "  Adjusted verifier_max_length "
+                    f"{configured_verifier_max_length} -> {self.verifier_max_length} "
+                    "(to match prover generation budget + prompt margin)"
+                )
+        else:
+            self.verifier_max_length = configured_verifier_max_length
 
         # Fixed rules don't need the aggregator MLP
         self.use_learned_aggregator = self.oversight_rule not in FIXED_RULES

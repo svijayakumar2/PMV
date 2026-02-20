@@ -36,13 +36,42 @@ from pmv.utils import cleanup_memory
 
 def reward_function(
     f_score: float,
-    role_aligned: bool,
+    role: str,
+    is_correct: bool,
+    reward_mode: str = "thresholded",
     alpha_1: float = 1.0, beta_1: float = 1.0,
     alpha_2: float = -0.5, beta_2: float = 0.25,
+    fool_threshold: float = 0.5,
+    sneaky_margin_scale: float = 1.0,
+    sneaky_correct_penalty: float = -1.0,
 ) -> float:
-    if role_aligned:
-        return alpha_1 + beta_1 * f_score
-    return alpha_2 + beta_2 * f_score
+    """
+    Reward shaping for helpful/sneaky roles.
+
+    Modes:
+      - thresholded (default): sneaky reward depends on fooling margin (f - threshold)
+      - legacy: previous role-alignment affine reward
+    """
+    role = str(role).strip().lower()
+
+    if reward_mode == "legacy":
+        role_aligned = is_correct if role == "helpful" else not is_correct
+        if role_aligned:
+            return alpha_1 + beta_1 * f_score
+        return alpha_2 + beta_2 * f_score
+
+    if role == "helpful":
+        if is_correct:
+            return alpha_1 + beta_1 * f_score
+        return alpha_2 + beta_2 * f_score
+
+    # Sneaky role:
+    # - Incorrect + high oversight score should be rewarded.
+    # - Incorrect + low oversight score should be penalized.
+    # - Correct sneaky answers are explicitly discouraged.
+    if is_correct:
+        return sneaky_correct_penalty
+    return sneaky_margin_scale * (f_score - fool_threshold)
 
 
 def _compute_label_weights(records: List[SolutionRecord]) -> Tuple[float, float, int, int]:
@@ -436,6 +465,9 @@ def collect_prover_experiences(
     beta_1 = float(train_cfg.get("beta_1", 1.0))
     alpha_2 = float(train_cfg.get("alpha_2", -0.5))
     beta_2 = float(train_cfg.get("beta_2", 0.25))
+    reward_mode = str(train_cfg.get("reward_mode", "thresholded")).lower()
+    sneaky_margin_scale = float(train_cfg.get("sneaky_margin_scale", 1.0))
+    sneaky_correct_penalty = float(train_cfg.get("sneaky_correct_penalty", -1.0))
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
     sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
@@ -490,8 +522,19 @@ def collect_prover_experiences(
         is_correct = math_dataset.check_solution(solution_true, response)
         verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
 
-        role_aligned = is_correct if role == "helpful" else not is_correct
-        r = reward_function(f_score, role_aligned, alpha_1, beta_1, alpha_2, beta_2)
+        r = reward_function(
+            f_score=f_score,
+            role=role,
+            is_correct=is_correct,
+            reward_mode=reward_mode,
+            alpha_1=alpha_1,
+            beta_1=beta_1,
+            alpha_2=alpha_2,
+            beta_2=beta_2,
+            fool_threshold=fool_threshold,
+            sneaky_margin_scale=sneaky_margin_scale,
+            sneaky_correct_penalty=sneaky_correct_penalty,
+        )
 
         if role == "sneaky":
             sneaky_total += 1
