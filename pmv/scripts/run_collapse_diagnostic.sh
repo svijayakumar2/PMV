@@ -30,6 +30,9 @@ ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 RUN_STAMP=${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}
 PROBE_MAX_NEW_TOKENS=${PROBE_MAX_NEW_TOKENS:-192}
 ATTACK_MAX_NEW_TOKENS=${ATTACK_MAX_NEW_TOKENS:-192}
+DECISION_THRESHOLD=${DECISION_THRESHOLD:-}
+VERIFIER_DECISION_THRESHOLD=${VERIFIER_DECISION_THRESHOLD:-}
+FOOL_THRESHOLD=${FOOL_THRESHOLD:-}
 
 # Optional:
 #   EXPERIMENT=diag_pe_min         -> single run
@@ -52,6 +55,9 @@ echo "Dataset mode: ${DATASET}"
 echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
 echo "Temperatures: ${EVAL_TEMPS}"
+echo "Decision threshold: ${DECISION_THRESHOLD:-default}"
+echo "Verifier decision threshold: ${VERIFIER_DECISION_THRESHOLD:-default}"
+echo "Fool threshold: ${FOOL_THRESHOLD:-default}"
 echo "Output dir: ${OUT_DIR}"
 echo ""
 
@@ -60,6 +66,16 @@ cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
 mkdir -p "${OUT_DIR}" results/checkpoints_diag
 
 EVAL_FILES=""
+THRESH_ARGS=""
+if [ -n "${DECISION_THRESHOLD}" ]; then
+  THRESH_ARGS="${THRESH_ARGS} --decision-threshold ${DECISION_THRESHOLD}"
+fi
+if [ -n "${VERIFIER_DECISION_THRESHOLD}" ]; then
+  THRESH_ARGS="${THRESH_ARGS} --verifier-decision-threshold ${VERIFIER_DECISION_THRESHOLD}"
+fi
+if [ -n "${FOOL_THRESHOLD}" ]; then
+  THRESH_ARGS="${THRESH_ARGS} --fool-threshold ${FOOL_THRESHOLD}"
+fi
 
 for exp in ${EXPERIMENT_LIST}; do
   cfg="pmv/configs/experiments/config_${exp}.yaml"
@@ -85,6 +101,7 @@ for exp in ${EXPERIMENT_LIST}; do
   fi
 
   if [ "${DATASET}" = "zebra" ]; then
+    # shellcheck disable=SC2086
     python3 -u -m pmv.evaluation "${cfg}" \
       --checkpoint "${ckpt}" \
       --dataset zebra \
@@ -93,9 +110,11 @@ for exp in ${EXPERIMENT_LIST}; do
       --attack-episodes "${ATTACK_EPISODES}" \
       --probe-max-new-tokens "${PROBE_MAX_NEW_TOKENS}" \
       --attack-max-new-tokens "${ATTACK_MAX_NEW_TOKENS}" \
+      ${THRESH_ARGS} \
       --temperatures ${EVAL_TEMPS} \
       --output "${eval_out}"
   else
+    # shellcheck disable=SC2086
     python3 -u -m pmv.evaluation "${cfg}" \
       --checkpoint "${ckpt}" \
       --dataset "${DATASET}" \
@@ -103,6 +122,7 @@ for exp in ${EXPERIMENT_LIST}; do
       --attack-episodes "${ATTACK_EPISODES}" \
       --probe-max-new-tokens "${PROBE_MAX_NEW_TOKENS}" \
       --attack-max-new-tokens "${ATTACK_MAX_NEW_TOKENS}" \
+      ${THRESH_ARGS} \
       --temperatures ${EVAL_TEMPS} \
       --output "${eval_out}"
   fi

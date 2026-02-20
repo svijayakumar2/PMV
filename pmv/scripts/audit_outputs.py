@@ -38,6 +38,12 @@ def _compute_scores(
     return scores, float(f)
 
 
+def _sample_for_eval(dataset):
+    if hasattr(dataset, "sample_eval"):
+        return dataset.sample_eval()
+    return dataset.sample()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Audit helpful vs sneaky outputs.")
     parser.add_argument("config", help="Path to config YAML")
@@ -113,7 +119,7 @@ def main():
 
     for ep in range(args.episodes):
         role = "helpful" if (ep % 2 == 0 or not args.balanced_roles and random.random() < float(train_cfg.get("mu_0", 0.5))) else "sneaky"
-        problem, solution_true = dataset.sample()
+        problem, solution_true = _sample_for_eval(dataset)
         prompt = create_role_prompt(problem, role, prover.tokenizer)
         do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
         temperature = helpful_temperature if role == "helpful" else sneaky_temperature

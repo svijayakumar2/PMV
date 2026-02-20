@@ -109,11 +109,23 @@ class MathDataset:
         return self.test_data
 
     def sample(self) -> Tuple[str, str]:
-        """Returns (problem_text, expected_answer)."""
+        """Returns (problem_text, expected_answer) from train split."""
+        return self.sample_train()
+
+    def sample_train(self) -> Tuple[str, str]:
+        """Returns (problem_text, expected_answer) from train split."""
         if self.train_data is None:
             self.download()
         idx = random.randint(0, len(self.train_data) - 1)
         item = self.train_data[idx]
+        return item["problem"], item["expected_answer"]
+
+    def sample_eval(self) -> Tuple[str, str]:
+        """Returns (problem_text, expected_answer) from test split for evaluation."""
+        if self.test_data is None:
+            self.download()
+        idx = random.randint(0, len(self.test_data) - 1)
+        item = self.test_data[idx]
         return item["problem"], item["expected_answer"]
 
     def load_math_problems(self, num_problems: int = 100, split: str = "train") -> List[dict]:
@@ -270,10 +282,20 @@ class GSM8KDataset(MathDataset):
         return answer_text.strip()
 
     def sample(self) -> Tuple[str, str]:
+        return self.sample_train()
+
+    def sample_train(self) -> Tuple[str, str]:
         if self.train_data is None:
             self.download()
         idx = random.randint(0, len(self.train_data) - 1)
         item = self.train_data[idx]
+        return item["question"], self._extract_expected(item["answer"])
+
+    def sample_eval(self) -> Tuple[str, str]:
+        if self.test_data is None:
+            self.download()
+        idx = random.randint(0, len(self.test_data) - 1)
+        item = self.test_data[idx]
         return item["question"], self._extract_expected(item["answer"])
 
     def check_solution(self, expected_answer: str, predicted_solution: str) -> bool:

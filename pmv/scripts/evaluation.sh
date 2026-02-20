@@ -27,6 +27,9 @@ PROBE_EPISODES=${PROBE_EPISODES:-120}
 ATTACK_EPISODES=${ATTACK_EPISODES:-60}
 PROBE_MAX_NEW_TOKENS=${PROBE_MAX_NEW_TOKENS:-}
 ATTACK_MAX_NEW_TOKENS=${ATTACK_MAX_NEW_TOKENS:-512}
+DECISION_THRESHOLD=${DECISION_THRESHOLD:-}
+VERIFIER_DECISION_THRESHOLD=${VERIFIER_DECISION_THRESHOLD:-}
+FOOL_THRESHOLD=${FOOL_THRESHOLD:-}
 SKIP_ADVERSARIAL=${SKIP_ADVERSARIAL:-0}
 ABLATION_ID=${ABLATION_ID:-}
 ABLATION_TAG=${ABLATION_TAG:-}
@@ -56,6 +59,9 @@ echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
 echo "Probe max new tokens: ${PROBE_MAX_NEW_TOKENS:-default}"
 echo "Attack max new tokens: ${ATTACK_MAX_NEW_TOKENS}"
+echo "Decision threshold: ${DECISION_THRESHOLD:-default}"
+echo "Verifier decision threshold: ${VERIFIER_DECISION_THRESHOLD:-default}"
+echo "Fool threshold: ${FOOL_THRESHOLD:-default}"
 echo "Skip adversarial: ${SKIP_ADVERSARIAL}"
 echo "Ablation ID: ${ABLATION_ID}"
 echo "Ablation tag: ${ABLATION_TAG}"
@@ -100,12 +106,24 @@ if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
   ADVERSARIAL_ARG+=(--skip-adversarial)
 fi
 
+THRESHOLD_ARGS=()
+if [ -n "${DECISION_THRESHOLD}" ]; then
+  THRESHOLD_ARGS+=(--decision-threshold "${DECISION_THRESHOLD}")
+fi
+if [ -n "${VERIFIER_DECISION_THRESHOLD}" ]; then
+  THRESHOLD_ARGS+=(--verifier-decision-threshold "${VERIFIER_DECISION_THRESHOLD}")
+fi
+if [ -n "${FOOL_THRESHOLD}" ]; then
+  THRESHOLD_ARGS+=(--fool-threshold "${FOOL_THRESHOLD}")
+fi
+
 if [ "${DATASET}" = "zebra" ]; then
   python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
       "${CKPT_ARG[@]}" \
       "${ABLATION_ARG[@]}" \
       "${PROBE_LEN_ARG[@]}" \
       "${ADVERSARIAL_ARG[@]}" \
+      "${THRESHOLD_ARGS[@]}" \
       --dataset zebra \
       --zebra-max-size "${ZEBRA_MAX_SIZE}" \
       --probe-episodes "${PROBE_EPISODES}" \
@@ -117,6 +135,7 @@ else
       "${ABLATION_ARG[@]}" \
       "${PROBE_LEN_ARG[@]}" \
       "${ADVERSARIAL_ARG[@]}" \
+      "${THRESHOLD_ARGS[@]}" \
       --dataset "${DATASET}" \
       --probe-episodes "${PROBE_EPISODES}" \
       --attack-episodes "${ATTACK_EPISODES}" \

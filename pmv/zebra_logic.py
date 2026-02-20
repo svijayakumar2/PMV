@@ -90,6 +90,14 @@ class ZebraLogicDataset:
         entry = random.choice(self.puzzles)
         return entry["puzzle_text"], json.dumps(entry["solution"])
 
+    def sample_train(self) -> Tuple[str, str]:
+        """Compatibility shim: Zebra is loaded as a fixed split at init."""
+        return self.sample()
+
+    def sample_eval(self) -> Tuple[str, str]:
+        """Compatibility shim: Zebra is loaded as a fixed split at init."""
+        return self.sample()
+
     def sample_with_metadata(self) -> Dict:
         return random.choice(self.puzzles)
 
