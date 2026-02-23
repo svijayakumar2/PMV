@@ -191,6 +191,26 @@ def _extract_json_payload(text: str) -> Optional[str]:
     return None
 
 
+def _canonicalize_math_payload(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return "UNKNOWN"
+
+    boxed = re.search(r'\\boxed\{([^}]+)\}', s)
+    if boxed:
+        return f"\\boxed{{{boxed.group(1).strip()}}}"
+
+    answer = re.search(r'[Aa]nswer:\s*([^\n]+)', s)
+    if answer:
+        return answer.group(1).strip()
+
+    number = re.search(r'([+-]?\d*\.?\d+)(?!.*[+-]?\d*\.?\d+)', s, re.DOTALL)
+    if number:
+        return number.group(1).strip()
+
+    return s.splitlines()[0].strip() or "UNKNOWN"
+
+
 def ensure_final_line(response: str, dataset_type: str = "math") -> str:
     """
     Enforce strict output format by appending a best-effort `FINAL:` line
@@ -198,26 +218,38 @@ def ensure_final_line(response: str, dataset_type: str = "math") -> str:
     """
     dataset_type = str(dataset_type).strip().lower()
 
-    for line in response.splitlines():
-        if line.strip().upper().startswith("FINAL:"):
-            return response
+    lines = response.splitlines()
+    final_idx = None
+    final_payload = ""
+    final_pat = re.compile(r'^\s*(?:FINAL|FINAL\s+ANSWER)\s*:\s*(.*)$', re.IGNORECASE)
+
+    for i in range(len(lines) - 1, -1, -1):
+        m = final_pat.match(lines[i].strip())
+        if m:
+            final_idx = i
+            final_payload = m.group(1).strip()
+            break
+
+    prefix = response.rstrip()
+    suffix_text = ""
+    if final_idx is not None:
+        prefix = "\n".join(lines[:final_idx]).rstrip()
+        suffix_text = "\n".join(lines[final_idx + 1:]).strip()
+        if final_payload:
+            suffix_text = (final_payload + ("\n" + suffix_text if suffix_text else "")).strip()
+    else:
+        suffix_text = response
 
     if dataset_type == "zebra":
-        payload = _extract_json_payload(response)
-        if payload:
-            return response.rstrip() + f"\nFINAL: {payload}"
-        return response.rstrip() + "\nFINAL: UNKNOWN"
+        payload = (
+            _extract_json_payload(suffix_text)
+            or _extract_json_payload(response)
+            or (final_payload.strip() if final_payload.strip() else None)
+            or "UNKNOWN"
+        )
+    else:
+        payload = _canonicalize_math_payload(suffix_text or response)
 
-    boxed = re.search(r'\\boxed\{([^}]+)\}', response)
-    if boxed:
-        return response.rstrip() + f"\nFINAL: \\boxed{{{boxed.group(1)}}}"
-
-    answer = re.search(r'[Aa]nswer:\s*([^\n]+)', response)
-    if answer:
-        return response.rstrip() + f"\nFINAL: {answer.group(1).strip()}"
-
-    number = re.search(r'([+-]?\d*\.?\d+)(?!.*[+-]?\d*\.?\d+)', response, re.DOTALL)
-    if number:
-        return response.rstrip() + f"\nFINAL: {number.group(1)}"
-
-    return response.rstrip() + "\nFINAL: UNKNOWN"
+    if prefix:
+        return f"{prefix}\nFINAL: {payload}"
+    return f"FINAL: {payload}"
