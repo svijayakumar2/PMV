@@ -1,0 +1,70 @@
+# Tuned math stabilization config for PMV multismall.
+# Primary goal: recover non-collapsed helpful correctness before rule comparisons.
+
+model:
+  prover_model: "Qwen/Qwen2.5-3B-Instruct"
+  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  num_verifiers: 1
+  use_quantization: true
+  prover_lora_r: 8
+  prover_lora_alpha: 16
+  verifier_lora_r: 8
+  verifier_lora_alpha: 16
+  aggregator_hidden_dim: 64
+
+dataset:
+  type: math
+  num_samples: 50000
+
+training:
+  oversight_rule: "supervised"
+  seed: 0
+  mu_0: 0.5
+
+  rounds: 5
+  bootstrap_episodes: 80
+  bootstrap_oracle_episodes: 80
+  collect_episodes: 100
+  max_buffer_size: 8000
+  helpful_warmup_steps: 80
+
+  verifier_lr: 1.0e-4
+  verifier_epochs: 3
+  verifier_batch_size: 8
+  verifier_max_length: 1024
+  auto_adjust_verifier_max_length: true
+  verifier_prompt_margin: 512
+  phase1_micro_step: false
+  phase1_balance_labels: true
+  phase1_stratified_batches: true
+  verifier_dropout: 0.0
+  softmin_beta: 5.0
+
+  prover_lr: 1.0e-5
+  ppo_epochs: 4
+  ppo_batch_size: 8
+  clip_ratio: 0.1
+  kl_coeff: 0.1
+  use_reference_model: false
+
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 512
+  sneaky_do_sample: true
+  sneaky_temperature: 0.9
+  sneaky_max_new_tokens: 512
+  helpful_warmup_max_length: 1024
+  ppo_max_length: 1024
+
+  # Legacy affine role-alignment reward for stabilization pass.
+  reward_mode: "legacy"
+  alpha_1: 2.0
+  beta_1: 1.0
+  alpha_2: -2.0
+  beta_2: -1.0
+  sneaky_fool_threshold: 0.5
+  sneaky_margin_scale: 1.0
+  sneaky_correct_penalty: -1.0
+
+  oversight_decision_threshold: 0.5
+  verifier_decision_threshold: 0.5
