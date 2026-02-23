@@ -50,15 +50,21 @@ def reward_function(
 
     Modes:
       - thresholded (default): sneaky reward depends on fooling margin (f - threshold)
-      - legacy: previous role-alignment affine reward
+      - affine: role-alignment affine reward from Eq. (4)
     """
     role = str(role).strip().lower()
+    reward_mode = str(reward_mode).strip().lower()
 
-    if reward_mode == "legacy":
+    if reward_mode == "affine":
         role_aligned = is_correct if role == "helpful" else not is_correct
         if role_aligned:
             return alpha_1 + beta_1 * f_score
         return alpha_2 + beta_2 * f_score
+
+    if reward_mode not in {"thresholded", "affine"}:
+        raise ValueError(
+            f"Unknown reward_mode={reward_mode!r}. Expected one of: thresholded, affine."
+        )
 
     if role == "helpful":
         if is_correct:

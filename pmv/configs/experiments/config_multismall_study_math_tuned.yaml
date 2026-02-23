@@ -56,8 +56,8 @@ training:
   helpful_warmup_max_length: 1024
   ppo_max_length: 1024
 
-  # Legacy affine role-alignment reward for stabilization pass.
-  reward_mode: "legacy"
+  # Affine role-alignment reward for stabilization pass.
+  reward_mode: "affine"
   alpha_1: 2.0
   beta_1: 1.0
   alpha_2: -2.0
