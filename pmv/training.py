@@ -500,6 +500,8 @@ def collect_prover_experiences(
     sneaky_do_sample = bool(train_cfg.get("sneaky_do_sample", True))
     helpful_max_new_tokens = int(train_cfg.get("helpful_max_new_tokens", 768))
     sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
+    helpful_only_rounds = int(train_cfg.get("helpful_only_rounds", 0))
+    collect_balanced_roles = bool(train_cfg.get("collect_balanced_roles", False))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
@@ -513,7 +515,12 @@ def collect_prover_experiences(
     print(f"\nCollecting {num_episodes} episodes...")
 
     for ep in range(num_episodes):
-        role = "helpful" if random.random() < mu_0 else "sneaky"
+        if round_idx <= helpful_only_rounds:
+            role = "helpful"
+        elif collect_balanced_roles:
+            role = "helpful" if (ep % 2 == 0) else "sneaky"
+        else:
+            role = "helpful" if random.random() < mu_0 else "sneaky"
         problem, solution_true = math_dataset.sample()
         prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
 
