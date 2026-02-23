@@ -17,7 +17,7 @@ import math
 import random
 import torch
 import torch.nn.functional as F
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from pmv.data import SolutionRecord, ReplayBuffer
 from pmv.ensemble import VerifierEnsemble
@@ -170,6 +170,7 @@ def train_prover_helpful_warmup(
     prover: Prover,
     dataset,
     config: Dict,
+    steps_override: Optional[int] = None,
 ):
     """
     Warm-start helpful behavior with direct supervised teacher forcing.
@@ -178,7 +179,10 @@ def train_prover_helpful_warmup(
     """
     train_cfg = config["training"]
     dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
-    steps = int(train_cfg.get("helpful_warmup_steps", 0))
+    if steps_override is None:
+        steps = int(train_cfg.get("helpful_warmup_steps", 0))
+    else:
+        steps = int(steps_override)
     if steps <= 0:
         return
 
@@ -667,7 +671,8 @@ def train_prover_ppo(
             prover.device,
             max_length=ppo_max_length,
         ).detach()
-        if base_prover is not None and kl_coeff > 0:
+        use_kl = base_prover is not None and kl_coeff > 0
+        if use_kl:
             ref_lp = compute_log_probs_batch(
                 base_prover.model,
                 base_prover.tokenizer,
@@ -677,8 +682,7 @@ def train_prover_ppo(
                 max_length=ppo_max_length,
             ).detach()
         else:
-            # No separate reference model: disable KL pressure by reusing old policy.
-            ref_lp = old_lp
+            ref_lp = None
 
     for epoch in range(epochs):
         prover.model.train()
@@ -691,7 +695,7 @@ def train_prover_ppo(
             b_responses = [responses[i] for i in bidx]
             b_adv = advantages[bidx]
             b_old = old_lp[bidx]
-            b_ref = ref_lp[bidx]
+            b_ref = ref_lp[bidx] if use_kl else None
 
             optimizer.zero_grad()
             try:
@@ -727,8 +731,11 @@ def train_prover_ppo(
                 ratios = torch.exp(log_ratios.clamp(-20, 20))
                 clipped = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio)
                 policy_loss = -torch.min(ratios * b_adv, clipped * b_adv).mean()
-                kl_penalty = (new_lp - b_ref).mean()
-                total = policy_loss + kl_coeff * kl_penalty
+                total = policy_loss
+                if use_kl and b_ref is not None:
+                    # Keep KL penalty non-negative; one-sided penalties can cause collapse.
+                    kl_penalty = torch.mean((new_lp - b_ref) ** 2)
+                    total = total + kl_coeff * kl_penalty
 
                 if torch.isnan(total) or torch.isinf(total):
                     optimizer.zero_grad()

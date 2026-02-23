@@ -136,8 +136,25 @@ def main(config_path: str = "configs/config.yaml"):
 
     num_bootstrap = int(train_cfg.get("bootstrap_episodes", 50))
     bootstrap_oracle_episodes = int(train_cfg.get("bootstrap_oracle_episodes", 0))
+    bootstrap_warmup_steps = int(
+        train_cfg.get("bootstrap_helpful_warmup_steps", train_cfg.get("helpful_warmup_steps", 0))
+    )
+    round_warmup_steps = int(
+        train_cfg.get("round_helpful_warmup_steps", train_cfg.get("helpful_warmup_steps", 0))
+    )
     mu_0 = float(train_cfg.get("mu_0", 0.5))
+    print(
+        "Helpful warmup schedule: "
+        f"bootstrap={bootstrap_warmup_steps} steps, per-round={round_warmup_steps} steps"
+    )
     print(f"\nGenerating {num_bootstrap} bootstrap solutions...")
+
+    train_prover_helpful_warmup(
+        prover=prover,
+        dataset=dataset,
+        config=config,
+        steps_override=bootstrap_warmup_steps,
+    )
 
     for i in range(num_bootstrap):
         role = "helpful" if random.random() < mu_0 else "sneaky"
@@ -227,6 +244,7 @@ def main(config_path: str = "configs/config.yaml"):
             prover=prover,
             dataset=dataset,
             config=config,
+            steps_override=round_warmup_steps,
         )
 
         prompts, responses, rewards, new_records = collect_prover_experiences(

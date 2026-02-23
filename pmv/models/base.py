@@ -60,4 +60,9 @@ class Model(nn.Module):
             pad_token_id=self.tokenizer.pad_token_id,
             **kwargs,
         )
-        return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Return only newly generated tokens (exclude the prompt prefix).
+        prompt_len = inputs["input_ids"].shape[1]
+        generated = outputs[0][prompt_len:]
+        if generated.numel() == 0:
+            generated = outputs[0]
+        return self.tokenizer.decode(generated, skip_special_tokens=True)
