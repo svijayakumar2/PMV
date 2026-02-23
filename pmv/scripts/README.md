@@ -3,7 +3,7 @@
 Top-level scripts are the active cluster workflow.
 
 ## Active run scripts
-- `run_multismall_study.sh`
+- `run_multismall_study.sh` (end-to-end multi-variant PMV loop)
 - `run_stage1_stabilize.sh`
 - `run_stage2_rule_compare.sh`
 - `submit_stage2_rule_compare.sh`

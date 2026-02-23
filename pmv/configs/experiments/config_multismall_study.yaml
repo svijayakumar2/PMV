@@ -1,9 +1,8 @@
-# Controlled study config for the core research question:
-# Can multiple small verifiers improve robustness + accuracy
-# for a fixed helpful prover?
+# End-to-end PMV study config:
+# compare verifier set size/rule/model while running full two-phase
+# training (verifier/aggregator persistence + prover reset each round).
 
 model:
-  # Keep prover strong/fixed, vary only oversight structure.
   prover_model: "Qwen/Qwen2.5-3B-Instruct"
   # Default verifier model; per-variant overrides happen in multi_small_study.py.
   verifier_model: "Qwen/Qwen2.5-3B-Instruct"
@@ -26,7 +25,13 @@ training:
   seed: 0
   mu_0: 0.5
 
-  # Verifier/aggregator training on fixed replay buffer.
+  rounds: 3
+  bootstrap_episodes: 40
+  bootstrap_oracle_episodes: 40
+  collect_episodes: 50
+  helpful_warmup_steps: 40
+
+  # Verifier/aggregator training.
   verifier_lr: 1.0e-4
   verifier_epochs: 3
   verifier_batch_size: 8
