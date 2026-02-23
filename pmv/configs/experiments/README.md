@@ -8,6 +8,7 @@ Top-level files in this folder are the active configs for the current workflow.
 - `config_kirchner_single.yaml`
 - `config_zebra.yaml`
 - `config_multismall_study.yaml`
+- `config_multismall_study_math.yaml`
 - `config_stage1_supervised.yaml`
 - `config_stage2_supervised.yaml`
 - `config_stage2_pe_min.yaml`
