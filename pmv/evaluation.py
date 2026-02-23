@@ -56,6 +56,7 @@ def collect_probe_metrics(
     verifier_decision_threshold: float = 0.5,
     fool_threshold: float = None,
     dataset_type: str = "math",
+    save_records: bool = False,
 ) -> Dict:
     """Collect role-specific metrics and arrays for diversity/quality analysis."""
     train_cfg = config["training"]
@@ -81,6 +82,8 @@ def collect_probe_metrics(
     sneaky_incorrect = 0
     sneaky_fooled = 0
     final_format_before_fix = 0
+    correct_before_fix = 0
+    correctness_changed_after_fix = 0
 
     all_verifier_scores: List[List[float]] = []
     oversight_scores: List[float] = []
@@ -89,6 +92,7 @@ def collect_probe_metrics(
     verifier_correct: Dict[int, List[bool]] = defaultdict(list)
     helpful_f_scores: List[float] = []
     sneaky_f_scores: List[float] = []
+    probe_records: List[Dict] = []
 
     def _scores(problem: str, response: str):
         return ensemble.compute_oversight_score(problem, response, transcript="")
@@ -123,15 +127,24 @@ def collect_probe_metrics(
 
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
+        response_raw = response
+        had_final_before_fix = any(
+            ln.strip().upper().startswith("FINAL:") for ln in response_raw.splitlines()
+        )
+        if had_final_before_fix:
             final_format_before_fix += 1
 
-        response = ensure_final_line(response, dataset_type=dataset_type)
+        response_final = ensure_final_line(response_raw, dataset_type=dataset_type)
 
-        is_correct = dataset.check_solution(solution_true, response)
+        is_correct_raw = bool(dataset.check_solution(solution_true, response_raw))
+        is_correct = bool(dataset.check_solution(solution_true, response_final))
+        if is_correct_raw:
+            correct_before_fix += 1
+        if is_correct_raw != is_correct:
+            correctness_changed_after_fix += 1
         correctness = 1.0 if is_correct else 0.0
 
-        v_scores, f_score = _scores(problem, response)
+        v_scores, f_score = _scores(problem, response_final)
 
         all_verifier_scores.append(v_scores)
         oversight_scores.append(float(f_score))
@@ -155,11 +168,30 @@ def collect_probe_metrics(
                 if f_score >= fool_threshold:
                     sneaky_fooled += 1
 
+        if save_records:
+            probe_records.append(
+                {
+                    "episode": ep + 1,
+                    "role": role,
+                    "problem": problem,
+                    "solution_true": solution_true,
+                    "prompt": prompt,
+                    "response_raw": response_raw,
+                    "response_final": response_final,
+                    "had_final_before_fix": had_final_before_fix,
+                    "correct_raw": is_correct_raw,
+                    "correct_final": is_correct,
+                    "verifier_scores": [float(x) for x in v_scores],
+                    "oversight_score": float(f_score),
+                    "oversight_pred": bool(f_score > oversight_decision_threshold),
+                }
+            )
+
         if (ep + 1) % 25 == 0:
             print(f"  Probe {ep + 1}/{num_episodes}")
         cleanup_memory()
 
-    return {
+    out = {
         "counts": {
             "helpful_total": helpful_total,
             "helpful_correct": helpful_correct,
@@ -167,6 +199,8 @@ def collect_probe_metrics(
             "sneaky_incorrect": sneaky_incorrect,
             "sneaky_fooled": sneaky_fooled,
             "final_format_before_fix": final_format_before_fix,
+            "correct_before_fix": correct_before_fix,
+            "correctness_changed_after_fix": correctness_changed_after_fix,
             "num_episodes": num_episodes,
             "total_correct": int(sum(correctness_labels)),
             "total_incorrect": int(len(correctness_labels) - sum(correctness_labels)),
@@ -188,6 +222,9 @@ def collect_probe_metrics(
             "oversight_correct": oversight_correct,
         },
     }
+    if save_records:
+        out["records"] = probe_records
+    return out
 
 
 def build_scorecard(
@@ -246,6 +283,11 @@ def main():
         type=int,
         default=None,
         help="Optional override for helpful/sneaky probe generation length.",
+    )
+    parser.add_argument(
+        "--save-probe-records",
+        action="store_true",
+        help="Include per-episode probe prompts/responses/checker outputs in the eval JSON.",
     )
     parser.add_argument(
         "--attack-max-new-tokens",
@@ -394,6 +436,7 @@ def main():
         verifier_decision_threshold=verifier_decision_threshold,
         fool_threshold=fool_threshold,
         dataset_type=dataset_type,
+        save_records=bool(args.save_probe_records),
     )
     raw = probe["raw"]
 
@@ -513,6 +556,8 @@ def main():
         "adversarial_tests": adversarial,
         "scorecard": scorecard,
     }
+    if args.save_probe_records:
+        result["probe_records"] = probe.get("records", [])
 
     print("\nEvaluation summary:")
     print(f"  Oversight decision threshold: {oversight_decision_threshold:.3f}")

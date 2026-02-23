@@ -45,7 +45,11 @@ if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
   EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS} --skip-adversarial"
 fi
 if [ "${SAVE_PROBE_RECORDS}" = "1" ]; then
-  EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS} --save-probe-records"
+  if python3 -u -m pmv.evaluation -h 2>&1 | grep -q -- "--save-probe-records"; then
+    EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS} --save-probe-records"
+  else
+    echo "Note: current pmv.evaluation does not support --save-probe-records; continuing without probe records."
+  fi
 fi
 
 echo "Job started at: $(date)"

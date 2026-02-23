@@ -82,7 +82,11 @@ if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
   THRESH_ARGS="${THRESH_ARGS} --skip-adversarial"
 fi
 if [ "${SAVE_PROBE_RECORDS}" = "1" ]; then
-  THRESH_ARGS="${THRESH_ARGS} --save-probe-records"
+  if python3 -u -m pmv.evaluation -h 2>&1 | grep -q -- "--save-probe-records"; then
+    THRESH_ARGS="${THRESH_ARGS} --save-probe-records"
+  else
+    echo "Note: current pmv.evaluation does not support --save-probe-records; continuing without probe records."
+  fi
 fi
 
 for exp in ${EXPERIMENT_LIST}; do
