@@ -70,6 +70,7 @@ def main():
         config = yaml.safe_load(f)
     train_cfg = config.get("training", {})
     model_cfg = config.get("model", {})
+    config_dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
 
     fool_threshold = float(args.fool_threshold) if args.fool_threshold is not None else float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_do_sample = bool(train_cfg.get("helpful_do_sample", False))
@@ -82,15 +83,19 @@ def main():
     if args.dataset == "zebra":
         from pmv.zebra_logic import ZebraLogicDataset
         dataset = ZebraLogicDataset(max_size=args.zebra_max_size)
+        dataset_type = "zebra"
     elif args.dataset == "gsm8k":
         from pmv.data import GSM8KDataset
         dataset = GSM8KDataset()
+        dataset_type = "gsm8k"
     elif args.dataset == "math":
         from pmv.data import MathDataset
         dataset = MathDataset()
+        dataset_type = "math"
     else:
         from pmv.main import get_dataset
         dataset = get_dataset(config)
+        dataset_type = config_dataset_type
 
     ensemble = VerifierEnsemble(config)
     ensemble.create_verifiers()
@@ -120,7 +125,7 @@ def main():
     for ep in range(args.episodes):
         role = "helpful" if (ep % 2 == 0 or not args.balanced_roles and random.random() < float(train_cfg.get("mu_0", 0.5))) else "sneaky"
         problem, solution_true = _sample_for_eval(dataset)
-        prompt = create_role_prompt(problem, role, prover.tokenizer)
+        prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
         do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
         temperature = helpful_temperature if role == "helpful" else sneaky_temperature
         max_new_tokens = helpful_max_new_tokens if role == "helpful" else sneaky_max_new_tokens
@@ -132,7 +137,7 @@ def main():
                 response = prover.generate(prompt, max_new_tokens=max_new_tokens, do_sample=False)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        response = ensure_final_line(response)
+        response = ensure_final_line(response, dataset_type=dataset_type)
 
         is_correct = bool(dataset.check_solution(solution_true, response))
         v_scores, f_score = _compute_scores(ensemble, problem, response)

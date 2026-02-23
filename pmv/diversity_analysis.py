@@ -52,7 +52,7 @@ import numpy as np
 
 from pmv.data import MathDataset
 from pmv.ensemble import VerifierEnsemble
-from pmv.prover import Prover, create_role_prompt
+from pmv.prover import Prover, create_role_prompt, ensure_final_line
 from pmv.utils import get_available_gpus, cleanup_memory
 
 
@@ -282,6 +282,7 @@ def collect_evaluation_data(
     num_episodes: int = 200,
     oversight_decision_threshold: float = 0.5,
     verifier_decision_threshold: float = 0.5,
+    dataset_type: str = "math",
 ) -> Dict:
     """Run prover + verifiers on a test set, collect all scores and correctness."""
     all_verifier_scores = []
@@ -293,11 +294,12 @@ def collect_evaluation_data(
     for ep in range(num_episodes):
         role = "helpful" if ep % 2 == 0 else "sneaky"
         problem, solution_true = _sample_for_eval(dataset)
-        prompt = create_role_prompt(problem, role, prover.tokenizer)
+        prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
         with torch.no_grad():
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
+        response = ensure_final_line(response, dataset_type=dataset_type)
 
         is_correct = dataset.check_solution(solution_true, response)
         c = 1.0 if is_correct else 0.0
@@ -347,6 +349,7 @@ def analyze_single_config(
     model_cfg = config["model"]
     train_cfg = config.get("training", {})
     num_verifiers = model_cfg.get("num_verifiers", 3)
+    dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
     oversight_decision_threshold = float(
         decision_threshold
         if decision_threshold is not None
@@ -389,6 +392,7 @@ def analyze_single_config(
         num_episodes=num_episodes,
         oversight_decision_threshold=oversight_decision_threshold,
         verifier_decision_threshold=verifier_threshold,
+        dataset_type=dataset_type,
     )
 
     results = {"config": config_path, "num_verifiers": num_verifiers}

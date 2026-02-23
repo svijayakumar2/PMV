@@ -55,6 +55,7 @@ def collect_probe_metrics(
     oversight_decision_threshold: float = 0.5,
     verifier_decision_threshold: float = 0.5,
     fool_threshold: float = None,
+    dataset_type: str = "math",
 ) -> Dict:
     """Collect role-specific metrics and arrays for diversity/quality analysis."""
     train_cfg = config["training"]
@@ -99,7 +100,7 @@ def collect_probe_metrics(
             role = "helpful" if random.random() < mu_0 else "sneaky"
 
         problem, solution_true = _sample_for_eval(dataset)
-        prompt = create_role_prompt(problem, role, prover.tokenizer)
+        prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
 
         do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
         temperature = helpful_temperature if role == "helpful" else sneaky_temperature
@@ -125,7 +126,7 @@ def collect_probe_metrics(
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_format_before_fix += 1
 
-        response = ensure_final_line(response)
+        response = ensure_final_line(response, dataset_type=dataset_type)
 
         is_correct = dataset.check_solution(solution_true, response)
         correctness = 1.0 if is_correct else 0.0
@@ -342,15 +343,19 @@ def main():
     if args.dataset == "zebra":
         from pmv.zebra_logic import ZebraLogicDataset
         dataset = ZebraLogicDataset(max_size=args.zebra_max_size)
+        dataset_type = "zebra"
     elif args.dataset == "gsm8k":
         from pmv.data import GSM8KDataset
         dataset = GSM8KDataset()
+        dataset_type = "gsm8k"
     elif args.dataset == "math":
         from pmv.data import MathDataset
         dataset = MathDataset()
+        dataset_type = "math"
     else:
         from pmv.main import get_dataset
         dataset = get_dataset(config)
+        dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
 
     print("Creating verifier ensemble...")
     ensemble = VerifierEnsemble(config)
@@ -388,6 +393,7 @@ def main():
         oversight_decision_threshold=oversight_decision_threshold,
         verifier_decision_threshold=verifier_decision_threshold,
         fool_threshold=fool_threshold,
+        dataset_type=dataset_type,
     )
     raw = probe["raw"]
 
@@ -434,6 +440,7 @@ def main():
             max_new_tokens=args.attack_max_new_tokens,
             progress_every=max(10, args.attack_episodes // 6),
             fool_threshold=fool_threshold,
+            dataset_type=dataset_type,
         )
         adversarial["consensus_manipulation"] = test_consensus_manipulation(
             ensemble, dataset, num_episodes=args.attack_episodes
@@ -445,6 +452,7 @@ def main():
             num_episodes=args.attack_episodes,
             max_new_tokens=args.attack_max_new_tokens,
             progress_every=max(10, args.attack_episodes // 6),
+            dataset_type=dataset_type,
         )
 
     thresholds = {

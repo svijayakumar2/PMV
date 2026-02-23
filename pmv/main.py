@@ -49,7 +49,7 @@ def get_dataset(config: dict):
         )
 
 
-def _build_oracle_response(dataset, solution_true: str):
+def _build_oracle_response(dataset, solution_true: str, dataset_type: str = "math"):
     """
     Construct a response string that the dataset checker accepts as correct.
     Returns None if no candidate can be verified as correct.
@@ -71,7 +71,7 @@ def _build_oracle_response(dataset, solution_true: str):
         pass
 
     for cand in candidates:
-        text = ensure_final_line(cand)
+        text = ensure_final_line(cand, dataset_type=dataset_type)
         try:
             if dataset.check_solution(solution_true, text):
                 return text
@@ -99,6 +99,7 @@ def main(config_path: str = "configs/config.yaml"):
     print(f"Seed: {seed}")
     print(f"Oversight rule: {train_cfg.get('oversight_rule', 'supervised')}")
 
+    ds_type = str(config.get("dataset", {}).get("type", "math")).lower()
     dataset = get_dataset(config)
     save_checkpoints = bool(train_cfg.get("save_checkpoints", True))
     checkpoint_every = int(train_cfg.get("checkpoint_every", 1))
@@ -141,12 +142,12 @@ def main(config_path: str = "configs/config.yaml"):
     for i in range(num_bootstrap):
         role = "helpful" if random.random() < mu_0 else "sneaky"
         problem, solution_true = dataset.sample()
-        prompt = create_role_prompt(problem, role, prover.tokenizer)
+        prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=ds_type)
         with torch.no_grad():
             response = prover.generate(prompt, max_new_tokens=512, do_sample=True, temperature=0.7)
         if response.startswith(prompt):
             response = response[len(prompt):].strip()
-        response = ensure_final_line(response)
+        response = ensure_final_line(response, dataset_type=ds_type)
         is_correct = dataset.check_solution(solution_true, response)
         replay_buffer.add(SolutionRecord(
             problem=problem, solution_true=solution_true, response=response,
@@ -160,7 +161,7 @@ def main(config_path: str = "configs/config.yaml"):
         added = 0
         for i in range(bootstrap_oracle_episodes):
             problem, solution_true = dataset.sample()
-            oracle_response = _build_oracle_response(dataset, solution_true)
+            oracle_response = _build_oracle_response(dataset, solution_true, dataset_type=ds_type)
             if oracle_response is None:
                 continue
             replay_buffer.add(SolutionRecord(

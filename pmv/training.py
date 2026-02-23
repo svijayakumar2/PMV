@@ -131,7 +131,11 @@ def _build_stratified_epoch_records(
     return out
 
 
-def _build_helpful_target_response(dataset, solution_true: str):
+def _build_helpful_target_response(
+    dataset,
+    solution_true: str,
+    dataset_type: str = "math",
+):
     """
     Build a minimal target response that checker accepts as correct.
     Returns None if no checked target could be built.
@@ -147,7 +151,7 @@ def _build_helpful_target_response(dataset, solution_true: str):
         pass
 
     for cand in candidates:
-        text = ensure_final_line(cand)
+        text = ensure_final_line(cand, dataset_type=dataset_type)
         try:
             if dataset.check_solution(solution_true, text):
                 return text
@@ -167,6 +171,7 @@ def train_prover_helpful_warmup(
     helpful targets before mixed helpful/sneaky rollouts.
     """
     train_cfg = config["training"]
+    dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
     steps = int(train_cfg.get("helpful_warmup_steps", 0))
     if steps <= 0:
         return
@@ -190,11 +195,20 @@ def train_prover_helpful_warmup(
 
         for _ in range(batch_size):
             problem, solution_true = dataset.sample()
-            target = _build_helpful_target_response(dataset, solution_true)
+            target = _build_helpful_target_response(
+                dataset,
+                solution_true,
+                dataset_type=dataset_type,
+            )
             if target is None:
                 continue
 
-            prompt = create_role_prompt(problem, "helpful", prover.tokenizer)
+            prompt = create_role_prompt(
+                problem,
+                "helpful",
+                prover.tokenizer,
+                dataset_type=dataset_type,
+            )
             full = prompt + target
 
             inp = prover.tokenizer(
@@ -459,6 +473,7 @@ def collect_prover_experiences(
 ) -> Tuple[List[str], List[str], List[float], List[SolutionRecord]]:
     """Generate solutions and compute rewards with direct verifier scoring."""
     train_cfg = config["training"]
+    dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
     num_episodes = int(train_cfg.get("collect_episodes", 50))
     mu_0 = float(train_cfg.get("mu_0", 0.5))
     alpha_1 = float(train_cfg.get("alpha_1", 1.0))
@@ -490,7 +505,7 @@ def collect_prover_experiences(
     for ep in range(num_episodes):
         role = "helpful" if random.random() < mu_0 else "sneaky"
         problem, solution_true = math_dataset.sample()
-        prompt = create_role_prompt(problem, role, prover.tokenizer)
+        prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
 
         gen_do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
         gen_temp = helpful_temperature if role == "helpful" else sneaky_temperature
@@ -513,7 +528,7 @@ def collect_prover_experiences(
                     )
             if out.startswith(prompt):
                 out = out[len(prompt):].strip()
-            return ensure_final_line(out)
+            return ensure_final_line(out, dataset_type=dataset_type)
 
         response = _gen_once(gen_temp, gen_do_sample)
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
