@@ -1,0 +1,52 @@
+# Controlled study config for the core research question:
+# Can multiple small verifiers improve robustness + accuracy
+# for a fixed helpful prover?
+
+model:
+  # Keep prover strong/fixed, vary only oversight structure.
+  prover_model: "Qwen/Qwen2.5-3B-Instruct"
+  # Default verifier model; per-variant overrides happen in multi_small_study.py.
+  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  num_verifiers: 3
+  use_quantization: true
+  prover_lora_r: 8
+  prover_lora_alpha: 16
+  verifier_lora_r: 8
+  verifier_lora_alpha: 16
+  aggregator_hidden_dim: 64
+
+dataset:
+  type: zebra
+  min_size: "2*3"
+  max_size: "3*3"
+
+training:
+  # Default; overridden per variant by the study runner.
+  oversight_rule: "supervised"
+  seed: 0
+  mu_0: 0.5
+
+  # Verifier/aggregator training on fixed replay buffer.
+  verifier_lr: 1.0e-4
+  verifier_epochs: 3
+  verifier_batch_size: 8
+  verifier_max_length: 384
+  auto_adjust_verifier_max_length: true
+  verifier_prompt_margin: 192
+  phase1_micro_step: false
+  phase1_balance_labels: true
+  phase1_stratified_batches: true
+  verifier_dropout: 0.0
+  softmin_beta: 5.0
+
+  # Generation controls for fixed-buffer build + eval.
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 192
+  sneaky_do_sample: true
+  sneaky_temperature: 0.9
+  sneaky_max_new_tokens: 192
+
+  oversight_decision_threshold: 0.5
+  verifier_decision_threshold: 0.5
+  sneaky_fool_threshold: 0.5

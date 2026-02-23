@@ -38,7 +38,7 @@ SAVE_PROBE_RECORDS=${SAVE_PROBE_RECORDS:-1}
 
 RUN_STAMP=${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}
 OUT_DIR=${OUT_DIR:-results/fast_eval/${RUN_STAMP}_${LSB_JOBID:-local}}
-OUT_JSON=${OUT_DIR}/eval_fast.json
+OUT_JSON=${OUT_JSON:-${OUT_DIR}/eval_fast.json}
 
 EXTRA_EVAL_ARGS=""
 if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
@@ -52,23 +52,39 @@ if [ "${SAVE_PROBE_RECORDS}" = "1" ]; then
   fi
 fi
 
+cd "${REPO_ROOT}" || exit 1
+mkdir -p "${OUT_DIR}"
+STATUS_FILE="${OUT_DIR}/status.txt"
+
+echo "starting" > "${STATUS_FILE}"
+{
+  echo "job_id=${LSB_JOBID:-local}"
+  echo "start_time=$(date)"
+  echo "host=$(hostname)"
+  echo "repo_root=${REPO_ROOT}"
+  echo "config_path=${CONFIG_PATH}"
+  echo "checkpoint=${CHECKPOINT}"
+  echo "out_dir=${OUT_DIR}"
+  echo "out_json=${OUT_JSON}"
+} > "${OUT_DIR}/run_info.txt"
+
 echo "Job started at: $(date)"
 echo "Running on host: $(hostname)"
 echo "Job ID: ${LSB_JOBID:-local}"
 echo "Config: ${CONFIG_PATH}"
 echo "Checkpoint: ${CHECKPOINT}"
 echo "Output dir: ${OUT_DIR}"
+echo "Output JSON: ${OUT_JSON}"
 echo ""
 
-cd "${REPO_ROOT}" || exit 1
-mkdir -p "${OUT_DIR}"
-
 if [ ! -f "${CONFIG_PATH}" ]; then
-  echo "Config not found: ${CONFIG_PATH}"
+  echo "FAILED: Config not found: ${CONFIG_PATH}" >&2
+  echo "failed: missing config" > "${STATUS_FILE}"
   exit 1
 fi
 if [ ! -f "${CHECKPOINT}" ]; then
-  echo "Checkpoint not found: ${CHECKPOINT}"
+  echo "FAILED: Checkpoint not found: ${CHECKPOINT}" >&2
+  echo "failed: missing checkpoint" > "${STATUS_FILE}"
   exit 1
 fi
 
@@ -88,8 +104,15 @@ python3 -u -m pmv.evaluation "${CONFIG_PATH}" \
   ${EXTRA_EVAL_ARGS} \
   --output "${OUT_JSON}"
 
+if [ ! -f "${OUT_JSON}" ]; then
+  echo "FAILED: evaluation finished but output JSON not found: ${OUT_JSON}" >&2
+  echo "failed: missing output json" > "${STATUS_FILE}"
+  exit 1
+fi
+
 python3 -u pmv/scripts/classify_collapse.py "${OUT_JSON}" | tee "${OUT_DIR}/collapse_summary.tsv"
 
+echo "success" > "${STATUS_FILE}"
 echo ""
 echo "Fast eval complete."
 echo "Job finished at: $(date)"

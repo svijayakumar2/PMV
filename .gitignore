@@ -5,3 +5,8 @@
 **/.DS_Store
 **/__pycache__
 results/ablations_hb/
+
+# PMV training artifacts (avoid accidental checkpoint commits)
+results/checkpoints*/
+results/**/checkpoints*/
+results/**/*.pt
