@@ -13,18 +13,20 @@ set -eu
 # ============================================================
 # Stage 2: matched oversight-rule comparison on stable 3x3 regime
 # Usage:
-#   bsub < scripts/run_stage2_rule_compare.sh
-#   EXPERIMENT=stage2_pe_min bsub < scripts/run_stage2_rule_compare.sh
+#   bsub < pmv/scripts/run_stage2_rule_compare.sh
+#   EXPERIMENT=stage2_pe_min bsub < pmv/scripts/run_stage2_rule_compare.sh
 # ============================================================
 
 export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
 export TRANSFORMERS_CACHE="$HF_HOME"
 export HF_DATASETS_CACHE="$HF_HOME"
 
+REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
+
 if [ -n "${EXPERIMENT:-}" ]; then
-  EXPERIMENT_LIST="${EXPERIMENT}"
+  EXPERIMENT_LIST_RAW="${EXPERIMENT}"
 else
-  EXPERIMENT_LIST="stage2_supervised stage2_pe_min stage2_pe_margin"
+  EXPERIMENT_LIST_RAW="stage2_supervised stage2_pe_min stage2_pe_margin"
 fi
 
 PROBE_EPISODES=${PROBE_EPISODES:-100}
@@ -39,22 +41,32 @@ OUT_DIR=${OUT_DIR:-results/stages/stage2/${RUN_STAMP}_${LSB_JOBID:-local}}
 echo "Job started at: $(date)"
 echo "Running on host: $(hostname)"
 echo "Job ID: ${LSB_JOBID:-local}"
-echo "Experiments: ${EXPERIMENT_LIST}"
+echo "Experiments (raw): ${EXPERIMENT_LIST_RAW}"
 echo "Output dir: ${OUT_DIR}"
 echo ""
 
-cd /dccstor/principled_ai/users/saranyaibm2/PMV || exit 1
+cd "${REPO_ROOT}" || exit 1
 mkdir -p "${OUT_DIR}" results/checkpoints_stage2
 
 EVAL_FILES=""
 
-for exp in ${EXPERIMENT_LIST}; do
+for exp_raw in ${EXPERIMENT_LIST_RAW}; do
+  exp="${exp_raw}"
+  exp="${exp#config_}"   # allow EXPERIMENT=config_stage2_supervised
+  exp="${exp%.yaml}"     # allow EXPERIMENT=config_stage2_supervised.yaml
+  case "${exp}" in
+    supervised) exp="stage2_supervised" ;;
+    pe_min) exp="stage2_pe_min" ;;
+    pe_margin) exp="stage2_pe_margin" ;;
+  esac
+
   cfg="pmv/configs/experiments/config_${exp}.yaml"
   ckpt="results/checkpoints_stage2/config_${exp}_latest.pt"
   eval_out="${OUT_DIR}/eval_${exp}.json"
 
   if [ ! -f "${cfg}" ]; then
     echo "Config not found: ${cfg}"
+    echo "Requested experiment token: ${exp_raw}"
     exit 1
   fi
 
