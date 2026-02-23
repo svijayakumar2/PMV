@@ -1,0 +1,71 @@
+# Tiny collapse gate: PE-Margin oversight (fast train + eval signal)
+model:
+  prover_model: "Qwen/Qwen2-0.5B"
+  verifier_model: "Qwen/Qwen2-0.5B"
+  num_verifiers: 3
+  use_quantization: true
+  prover_lora_r: 8
+  prover_lora_alpha: 16
+  verifier_lora_r: 8
+  verifier_lora_alpha: 16
+  aggregator_hidden_dim: 64
+
+dataset:
+  type: zebra
+  min_size: "2*3"
+  max_size: "3*3"
+
+training:
+  oversight_rule: "pe_margin"
+  seed: 0
+
+  rounds: 1
+  mu_0: 0.7
+  bootstrap_episodes: 12
+  bootstrap_oracle_episodes: 16
+  collect_episodes: 16
+  max_buffer_size: 800
+  save_checkpoints: true
+  checkpoint_every: 1
+  checkpoint_root: "results/checkpoints_tiny"
+
+  verifier_lr: 1.0e-4
+  verifier_epochs: 1
+  verifier_batch_size: 4
+  verifier_max_length: 320
+  auto_adjust_verifier_max_length: true
+  verifier_prompt_margin: 160
+  phase1_micro_step: false
+  phase1_balance_labels: true
+  phase1_stratified_batches: true
+  verifier_dropout: 0.0
+  softmin_beta: 5.0
+
+  prover_lr: 5.0e-6
+  helpful_warmup_steps: 24
+  helpful_warmup_batch_size: 4
+  helpful_warmup_lr: 2.0e-5
+  helpful_warmup_max_length: 320
+  ppo_epochs: 1
+  ppo_batch_size: 8
+  clip_ratio: 0.1
+  kl_coeff: 0.1
+  use_reference_model: false
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 160
+  sneaky_do_sample: true
+  sneaky_temperature: 0.9
+  sneaky_max_new_tokens: 160
+  ppo_max_length: 384
+
+  alpha_1: 1.0
+  beta_1: 1.0
+  alpha_2: -0.5
+  beta_2: 0.25
+  reward_mode: "thresholded"
+  sneaky_margin_scale: 1.0
+  sneaky_correct_penalty: -1.0
+  sneaky_fool_threshold: 0.5
+  oversight_decision_threshold: 0.5
+  verifier_decision_threshold: 0.5
