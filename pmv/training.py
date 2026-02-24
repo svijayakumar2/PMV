@@ -502,6 +502,7 @@ def collect_prover_experiences(
     sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
     helpful_only_rounds = int(train_cfg.get("helpful_only_rounds", 0))
     collect_balanced_roles = bool(train_cfg.get("collect_balanced_roles", False))
+    sneaky_retries_for_incorrect = int(train_cfg.get("sneaky_retries_for_incorrect", 1))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
@@ -547,7 +548,18 @@ def collect_prover_experiences(
                 out = out[len(prompt):].strip()
             return ensure_final_line(out, dataset_type=dataset_type)
 
-        response = _gen_once(gen_temp, gen_do_sample)
+        if role == "sneaky":
+            tries = max(1, sneaky_retries_for_incorrect)
+            response = None
+            for _ in range(tries):
+                cand = _gen_once(gen_temp, gen_do_sample)
+                if not math_dataset.check_solution(solution_true, cand):
+                    response = cand
+                    break
+            if response is None:
+                response = cand
+        else:
+            response = _gen_once(gen_temp, gen_do_sample)
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
 
