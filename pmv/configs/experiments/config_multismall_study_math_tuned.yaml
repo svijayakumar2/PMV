@@ -55,6 +55,7 @@ training:
   helpful_max_new_tokens: 512
   sneaky_do_sample: true
   sneaky_temperature: 0.9
+  sneaky_retries_for_incorrect: 3
   sneaky_max_new_tokens: 512
   helpful_warmup_max_length: 1536
   ppo_max_length: 1536
