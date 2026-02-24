@@ -1,6 +1,7 @@
 .idea
 .env
 /.venv
+*.tsv
 /scripts
 **/.DS_Store
 **/__pycache__
