@@ -27,6 +27,9 @@ class VerifierEnsemble:
 
         train_cfg = config["training"]
         self.oversight_rule = train_cfg.get("oversight_rule", "supervised")
+        self.supervised_single_identity = bool(
+            train_cfg.get("supervised_single_identity", True)
+        )
         configured_verifier_max_length = int(train_cfg.get("verifier_max_length", 512))
         auto_adjust_verifier_max_length = bool(
             train_cfg.get("auto_adjust_verifier_max_length", True)
@@ -46,8 +49,18 @@ class VerifierEnsemble:
         else:
             self.verifier_max_length = configured_verifier_max_length
 
-        # Fixed rules don't need the aggregator MLP
-        self.use_learned_aggregator = self.oversight_rule not in FIXED_RULES
+        # Fixed rules don't need the aggregator MLP. For supervised single-verifier
+        # runs, use identity aggregation (f = verifier score) to avoid a degenerate
+        # 1D MLP bottleneck that can collapse calibration.
+        self.use_identity_supervised_single = (
+            self.oversight_rule == "supervised"
+            and self.num_verifiers == 1
+            and self.supervised_single_identity
+        )
+        self.use_learned_aggregator = (
+            self.oversight_rule not in FIXED_RULES
+            and not self.use_identity_supervised_single
+        )
         agg_device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.aggregator_device = agg_device
 
@@ -63,6 +76,8 @@ class VerifierEnsemble:
         else:
             self.aggregator = None
             self.aggregator_optimizer = None
+            if self.use_identity_supervised_single:
+                print("  Using identity aggregation for supervised single-verifier mode.")
 
         self.verifiers: List[DebatingVerifier] = []
 
@@ -117,6 +132,8 @@ class VerifierEnsemble:
         stacked = torch.stack(score_tensors)
         if self.use_learned_aggregator:
             aggregated = self.aggregator(stacked)
+        elif self.use_identity_supervised_single:
+            aggregated = stacked.mean()
         else:
             rule_fn = FIXED_RULES[self.oversight_rule]
             aggregated = rule_fn(stacked)
@@ -125,6 +142,8 @@ class VerifierEnsemble:
     def _aggregate_scores(self, scores: List[float]) -> float:
         if self.use_learned_aggregator:
             return self.aggregator.aggregate_inference(scores)
+        if self.use_identity_supervised_single:
+            return float(sum(scores) / max(1, len(scores)))
         rule_fn = FIXED_RULES[self.oversight_rule]
         t = torch.tensor(scores, dtype=torch.float32)
         return float(rule_fn(t).item())

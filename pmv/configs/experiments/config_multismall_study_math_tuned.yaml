@@ -59,16 +59,16 @@ training:
   helpful_warmup_max_length: 1536
   ppo_max_length: 1536
 
-  # Use fooling-margin reward for sneaky pressure.
-  reward_mode: "thresholded"
+  # Canonical role-alignment reward from the architecture.
+  reward_mode: "affine"
   alpha_1: 2.0
   beta_1: 1.0
   alpha_2: -2.0
   beta_2: -1.0
-  # Center threshold near observed sneaky oversight band (~0.463) to avoid flat rewards.
-  sneaky_fool_threshold: 0.463
-  sneaky_margin_scale: 200.0
+  sneaky_fool_threshold: 0.5
+  sneaky_margin_scale: 1.0
   sneaky_correct_penalty: -1.0
+  supervised_single_identity: true
 
   oversight_decision_threshold: 0.5
   verifier_decision_threshold: 0.5
