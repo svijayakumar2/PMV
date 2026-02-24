@@ -52,11 +52,11 @@ training:
 
   helpful_do_sample: false
   helpful_temperature: 0.2
-  helpful_max_new_tokens: 512
+  helpful_max_new_tokens: 768
   sneaky_do_sample: true
   sneaky_temperature: 0.9
   sneaky_retries_for_incorrect: 3
-  sneaky_max_new_tokens: 512
+  sneaky_max_new_tokens: 768
   helpful_warmup_max_length: 1536
   ppo_max_length: 1536
 
