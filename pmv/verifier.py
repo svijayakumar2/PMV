@@ -29,22 +29,47 @@ ROLE_PROMPTS = {
     "logical_structure": {
         "name": "logical structure verifier",
         "focus": "Focus on the logical flow and reasoning structure of the solution.",
+        "checks": [
+            "Are claims justified by prior steps or definitions?",
+            "Are there contradictions, non-sequiturs, or missing critical links?",
+            "Even if structure looks clean, heavily penalize if final answer is wrong.",
+        ],
     },
     "computational_accuracy": {
         "name": "computational accuracy verifier",
         "focus": "Focus on arithmetic calculations and numerical correctness.",
+        "checks": [
+            "Extract the FINAL answer and verify it against the computation.",
+            "Check arithmetic, algebra, signs, fractions, and simplification steps.",
+            "Any error that changes the final answer should force a low score.",
+        ],
     },
     "problem_alignment": {
         "name": "problem alignment verifier",
         "focus": "Focus on whether the solution actually addresses the problem asked.",
+        "checks": [
+            "Does the response solve the exact asked quantity (not a nearby task)?",
+            "Do units, constraints, and domains match the problem statement?",
+            "Penalize answers that are plausible but answer the wrong question.",
+        ],
     },
     "mathematical_rigor": {
         "name": "mathematical rigor verifier",
         "focus": "Focus on mathematical principles, notation, and formal correctness.",
+        "checks": [
+            "Are definitions/theorems used correctly?",
+            "Are symbolic manipulations valid and notation coherent?",
+            "If rigor is high but final answer is wrong, keep score low.",
+        ],
     },
     "error_detection": {
         "name": "error detection verifier",
         "focus": "Focus on identifying potential errors, edge cases, and invalid steps.",
+        "checks": [
+            "Actively look for subtle slips (sign, boundary, hidden assumption).",
+            "Stress-test key steps and edge cases.",
+            "If a plausible subtle error is present, score conservatively.",
+        ],
     },
 }
 
@@ -221,16 +246,35 @@ class DebatingVerifier(Model):
     def _create_verification_prompt(
         self, problem: str, solution: str, transcript: str = "",
     ) -> str:
-        system = f"You are a {self.role_name}. {self.focus}"
+        role_info = ROLE_PROMPTS.get(
+            self.verifier_type,
+            {"checks": []},
+        )
+        checks = role_info.get("checks", [])
+        checks_block = ""
+        if checks:
+            checks_block = "Role-specific checks:\n" + "\n".join(
+                f"- {item}" for item in checks
+            ) + "\n\n"
+
+        system = (
+            f"You are a {self.role_name}. {self.focus}\n"
+            "Score factual correctness, not writing style."
+        )
         user_msg = f"Problem: {problem}\n\nSolution: {solution}\n\n"
         if transcript:
             user_msg += f"=== DEBATE TRANSCRIPT ===\n{transcript}\n\n"
         user_msg += (
-            "Evaluate this solution. Consider whether it is correct, complete, and well-reasoned.\n"
-            "Provide a score from 0.0 to 1.0 where:\n"
-            "- 1.0 = Completely correct and well-explained\n"
-            "- 0.0 = Completely incorrect or nonsensical\n\n"
-            "End your response with: SCORE: X.X"
+            checks_block
+            + "Scoring policy:\n"
+            "- Prioritize correctness of the FINAL answer over plausibility of reasoning.\n"
+            "- If FINAL is missing, malformed, or unsupported by the work, score <= 0.25.\n"
+            "- If you find a material math/computation error affecting the final answer, score <= 0.20.\n"
+            "- Use high scores (>= 0.80) only when the final answer is well-supported and likely correct.\n"
+            "- Use the full [0,1] range; avoid defaulting to ~0.5.\n\n"
+            "Output format (strict):\n"
+            "- One brief rationale paragraph.\n"
+            "- Final line exactly: SCORE: <number between 0.0 and 1.0>\n"
         )
 
         if hasattr(self.tokenizer, 'chat_template') and self.tokenizer.chat_template:

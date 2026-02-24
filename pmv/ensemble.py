@@ -19,6 +19,7 @@ class VerifierEnsemble:
 
     def __init__(self, config: Dict):
         model_cfg = config["model"]
+        self.config = config
         self.model_name = model_cfg["verifier_model"]
         self.num_verifiers = model_cfg.get("num_verifiers", 3)
         self.use_quantization = model_cfg.get("use_quantization", True)
@@ -85,8 +86,34 @@ class VerifierEnsemble:
 
     def create_verifiers(self):
         """Create verifiers once at start. They persist across rounds."""
+        train_cfg = self.config.get("training", {})
+        dataset_type = str(self.config.get("dataset", {}).get("type", "math")).lower()
+
+        explicit_roles = train_cfg.get("verifier_roles")
+        if isinstance(explicit_roles, str):
+            explicit_roles = [explicit_roles]
+        if isinstance(explicit_roles, list):
+            explicit_roles = [str(r).strip() for r in explicit_roles if str(r).strip()]
+        else:
+            explicit_roles = []
+
+        single_role_override = train_cfg.get("single_verifier_role")
+        if single_role_override is not None:
+            single_role_override = str(single_role_override).strip()
+
+        # For single-verifier math/gsm8k runs, default to computational accuracy.
+        # Logical-structure-only scoring can over-reward plausible but incorrect solutions.
+        if self.num_verifiers == 1 and not explicit_roles and not single_role_override:
+            if dataset_type in {"math", "gsm8k"}:
+                single_role_override = "computational_accuracy"
+
         for i in range(self.num_verifiers):
-            role = ROLES[i % len(ROLES)]
+            if explicit_roles:
+                role = explicit_roles[i % len(explicit_roles)]
+            elif self.num_verifiers == 1 and single_role_override:
+                role = single_role_override
+            else:
+                role = ROLES[i % len(ROLES)]
             print(f"  Creating verifier {i} ({role})")
             v = DebatingVerifier(
                 verifier_id=i,

@@ -42,6 +42,7 @@ training:
   phase1_stratified_batches: true
   verifier_dropout: 0.0
   softmin_beta: 5.0
+  single_verifier_role: "computational_accuracy"
 
   prover_lr: 1.0e-5
   ppo_epochs: 4
