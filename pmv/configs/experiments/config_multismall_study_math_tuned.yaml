@@ -40,6 +40,9 @@ training:
   phase1_micro_step: false
   phase1_balance_labels: true
   phase1_stratified_batches: true
+  phase1_separation_lambda: 0.5
+  phase1_separation_margin: 0.08
+  phase1_separation_min_per_class: 1
   verifier_dropout: 0.0
   softmin_beta: 5.0
   single_verifier_role: "computational_accuracy"
@@ -56,7 +59,9 @@ training:
   helpful_max_new_tokens: 768
   sneaky_do_sample: true
   sneaky_temperature: 0.9
+  collect_paired_roles: true
   sneaky_retries_for_incorrect: 3
+  sneaky_select_hard_negative: true
   sneaky_max_new_tokens: 768
   helpful_warmup_max_length: 1536
   ppo_max_length: 1536

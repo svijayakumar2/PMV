@@ -294,6 +294,13 @@ def train_phase1(
     micro_step = bool(train_cfg.get("phase1_micro_step", True))
     balance_labels = bool(train_cfg.get("phase1_balance_labels", True))
     stratified_batches = bool(train_cfg.get("phase1_stratified_batches", True))
+    separation_lambda = float(train_cfg.get("phase1_separation_lambda", 0.0))
+    separation_margin = float(train_cfg.get("phase1_separation_margin", 0.1))
+    separation_min_per_class = int(train_cfg.get("phase1_separation_min_per_class", 1))
+    use_separation_loss = (
+        oversight_rule == "supervised"
+        and separation_lambda > 0.0
+    )
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (oversight_rule={oversight_rule})")
@@ -320,6 +327,13 @@ def train_phase1(
             f"  Label balance: positives={n_pos}, negatives={n_neg}, "
             f"weights(pos/neg)=({pos_w:.3f}/{neg_w:.3f})"
         )
+    if use_separation_loss:
+        print(
+            f"  Separation loss enabled: lambda={separation_lambda:g}, "
+            f"margin={separation_margin:g}, min_per_class={separation_min_per_class}"
+        )
+        if micro_step:
+            print("  Note: separation loss is applied in batched mode; disable phase1_micro_step for effect.")
     final_loss = float("inf")
 
     for epoch in range(epochs):
@@ -400,6 +414,8 @@ def train_phase1(
             else:
                 optimizer.zero_grad()
                 batch_losses = []
+                batch_oversights = []
+                batch_targets = []
                 for rec in batch:
                     try:
                         score_tensors, oversight = ensemble.compute_oversight_score_training(
@@ -446,6 +462,9 @@ def train_phase1(
 
                         if not (torch.isnan(loss) or torch.isinf(loss)):
                             batch_losses.append(loss)
+                            if use_separation_loss:
+                                batch_oversights.append(oversight)
+                                batch_targets.append(target)
                     except Exception as e:
                         print(f"  Sample error: {e}")
                         continue
@@ -453,6 +472,20 @@ def train_phase1(
                 if not batch_losses:
                     continue
                 total_loss = torch.stack(batch_losses).mean()
+                if use_separation_loss and batch_oversights:
+                    overs = torch.stack(batch_oversights)
+                    targs = torch.stack(batch_targets)
+                    pos_mask = targs >= 0.5
+                    neg_mask = targs < 0.5
+                    if (
+                        int(pos_mask.sum().item()) >= separation_min_per_class
+                        and int(neg_mask.sum().item()) >= separation_min_per_class
+                    ):
+                        sep = overs[pos_mask].mean() - overs[neg_mask].mean()
+                        sep_penalty = F.relu(
+                            torch.tensor(separation_margin, device=overs.device, dtype=overs.dtype) - sep
+                        )
+                        total_loss = total_loss + separation_lambda * sep_penalty
                 total_loss.backward()
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
@@ -502,7 +535,9 @@ def collect_prover_experiences(
     sneaky_max_new_tokens = int(train_cfg.get("sneaky_max_new_tokens", 768))
     helpful_only_rounds = int(train_cfg.get("helpful_only_rounds", 0))
     collect_balanced_roles = bool(train_cfg.get("collect_balanced_roles", False))
+    collect_paired_roles = bool(train_cfg.get("collect_paired_roles", False))
     sneaky_retries_for_incorrect = int(train_cfg.get("sneaky_retries_for_incorrect", 1))
+    sneaky_select_hard_negative = bool(train_cfg.get("sneaky_select_hard_negative", True))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
@@ -512,17 +547,30 @@ def collect_prover_experiences(
     sneaky_fooled = 0
     sneaky_f_values = []
     helpful_f_values = []
+    paired_problem = None
+    paired_solution_true = None
 
     print(f"\nCollecting {num_episodes} episodes...")
 
     for ep in range(num_episodes):
         if round_idx <= helpful_only_rounds:
             role = "helpful"
+            problem, solution_true = math_dataset.sample()
+        elif collect_paired_roles:
+            # Pair adjacent episodes on the same problem to improve helpful/sneaky
+            # comparability and reduce distribution drift.
+            if ep % 2 == 0 or paired_problem is None:
+                paired_problem, paired_solution_true = math_dataset.sample()
+                role = "helpful"
+            else:
+                role = "sneaky"
+            problem, solution_true = paired_problem, paired_solution_true
         elif collect_balanced_roles:
             role = "helpful" if (ep % 2 == 0) else "sneaky"
+            problem, solution_true = math_dataset.sample()
         else:
             role = "helpful" if random.random() < mu_0 else "sneaky"
-        problem, solution_true = math_dataset.sample()
+            problem, solution_true = math_dataset.sample()
         prompt = create_role_prompt(problem, role, prover.tokenizer, dataset_type=dataset_type)
 
         gen_do_sample = helpful_do_sample if role == "helpful" else sneaky_do_sample
@@ -548,23 +596,48 @@ def collect_prover_experiences(
                 out = out[len(prompt):].strip()
             return ensure_final_line(out, dataset_type=dataset_type)
 
+        def _score_response(resp_text: str):
+            is_correct_local = math_dataset.check_solution(solution_true, resp_text)
+            verifier_scores_local, f_local = ensemble.compute_oversight_score(
+                problem, resp_text, transcript=""
+            )
+            return is_correct_local, verifier_scores_local, float(f_local)
+
         if role == "sneaky":
             tries = max(1, sneaky_retries_for_incorrect)
-            response = None
+            candidates = []
             for _ in range(tries):
                 cand = _gen_once(gen_temp, gen_do_sample)
-                if not math_dataset.check_solution(solution_true, cand):
-                    response = cand
+                cand_correct, cand_v_scores, cand_f = _score_response(cand)
+                candidates.append((cand, cand_correct, cand_v_scores, cand_f))
+
+                if not sneaky_select_hard_negative and (not cand_correct):
                     break
-            if response is None:
-                response = cand
+
+            if sneaky_select_hard_negative:
+                incorrect = [c for c in candidates if not c[1]]
+                if incorrect:
+                    response, is_correct, verifier_scores, f_score = max(
+                        incorrect, key=lambda x: x[3]
+                    )
+                else:
+                    response, is_correct, verifier_scores, f_score = max(
+                        candidates, key=lambda x: x[3]
+                    )
+            else:
+                chosen = None
+                for c in candidates:
+                    if not c[1]:
+                        chosen = c
+                        break
+                if chosen is None:
+                    chosen = candidates[-1]
+                response, is_correct, verifier_scores, f_score = chosen
         else:
             response = _gen_once(gen_temp, gen_do_sample)
+            is_correct, verifier_scores, f_score = _score_response(response)
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
-
-        is_correct = math_dataset.check_solution(solution_true, response)
-        verifier_scores, f_score = ensemble.compute_oversight_score(problem, response, transcript="")
 
         r = reward_function(
             f_score=f_score,
