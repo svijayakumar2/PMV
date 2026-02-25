@@ -1,0 +1,29 @@
+{
+  "run_metadata": {
+    "timestamp_utc": "2026-02-25T02:38:19.751196+00:00",
+    "job_id": "408350",
+    "seed": 0
+  },
+  "base_config": "pmv/configs/experiments/config_multismall_study_math_tuned.yaml",
+  "variants": "single_small_3b:1:supervised:small",
+  "output_dir": "results/studies/multi_small_math_tuned/20260224_181343_408350",
+  "summary_rows": [
+    {
+      "variant_id": "single_small_3b",
+      "num_verifiers": 1,
+      "oversight_rule": "supervised",
+      "prover_model": "Qwen/Qwen2.5-3B-Instruct",
+      "verifier_model": "Qwen/Qwen2.5-3B-Instruct",
+      "helpful_correctness": 0.5,
+      "sneaky_incorrect_rate": 0.7,
+      "sneaky_fool_rate": 0.55,
+      "binary_accuracy": 0.45,
+      "separation": 0.0791742795457443,
+      "n_correct": 16,
+      "n_incorrect": 24
+    }
+  ],
+  "eval_files": [
+    "results/studies/multi_small_math_tuned/20260224_181343_408350/eval_single_small_3b.json"
+  ]
+}
