@@ -2,11 +2,11 @@
 #BSUB -J pmv_multismall_math_tuned_2gpu
 #BSUB -q normal
 #BSUB -gpu "num=2:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB"
-#BSUB -M 64GB
-#BSUB -R "rusage[mem=64GB]"
+#BSUB -M 128GB
+#BSUB -R "rusage[mem=128GB]"
 #BSUB -o /u/saranyaibm2/.lsbatch/%J.out
 #BSUB -e /u/saranyaibm2/.lsbatch/%J.err
-#BSUB -W 24:00
+#BSUB -W 48:00
 
 set -eu
 
@@ -16,6 +16,7 @@ set -eu
 export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
 export TRANSFORMERS_CACHE="$HF_HOME"
 export HF_DATASETS_CACHE="$HF_HOME"
+export PYTHONFAULTHANDLER=1
 
 REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
 BASE_CONFIG=${BASE_CONFIG:-pmv/configs/experiments/config_multismall_study_math_tuned.yaml}

@@ -12,6 +12,7 @@ import copy
 import csv
 import json
 import os
+import signal
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,7 +47,21 @@ def _parse_variants(variant_str: str) -> List[Tuple[str, int, str, Optional[str]
 
 def _run_cmd(cmd: List[str]):
     print("RUN:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        signame = None
+        if int(e.returncode) < 0:
+            try:
+                signame = signal.Signals(-int(e.returncode)).name
+            except Exception:
+                signame = "UNKNOWN_SIGNAL"
+        detail = f"returncode={e.returncode}"
+        if signame is not None:
+            detail += f" ({signame})"
+        raise RuntimeError(
+            f"Subprocess failed: {' '.join(cmd)} :: {detail}"
+        ) from e
 
 
 def _write_csv(path: Path, rows: List[Dict]):
