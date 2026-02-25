@@ -96,8 +96,34 @@ def main(config_path: str = "configs/config.yaml"):
     random.seed(seed)
     torch.manual_seed(seed)
     sneaky_fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
+    available_gpus = get_available_gpus()
+    prover_device = train_cfg.get("prover_device")
+    if prover_device is not None:
+        prover_device = str(prover_device).strip() or None
+    if prover_device is None and available_gpus:
+        prover_device = "cuda:0"
+
+    split_reference_gpu = bool(train_cfg.get("split_reference_gpu", True))
+    reference_prover_device = train_cfg.get("reference_prover_device")
+    if reference_prover_device is not None:
+        reference_prover_device = str(reference_prover_device).strip() or None
+    if (
+        reference_prover_device is None
+        and split_reference_gpu
+        and len(available_gpus) >= 2
+    ):
+        if prover_device and prover_device.startswith("cuda:1"):
+            reference_prover_device = "cuda:0"
+        else:
+            reference_prover_device = "cuda:1"
+
     print(f"Seed: {seed}")
     print(f"Oversight rule: {train_cfg.get('oversight_rule', 'supervised')}")
+    print(
+        "Device plan: "
+        f"prover={prover_device or 'auto'}, "
+        f"reference={reference_prover_device or prover_device or 'auto'}"
+    )
 
     ds_type = str(config.get("dataset", {}).get("type", "math")).lower()
     dataset = get_dataset(config)
@@ -132,6 +158,7 @@ def main(config_path: str = "configs/config.yaml"):
         use_quantization=model_cfg.get("use_quantization", True),
         lora_r=model_cfg.get("prover_lora_r", 8),
         lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+        preferred_device=prover_device,
     )
 
     num_bootstrap = int(train_cfg.get("bootstrap_episodes", 50))
@@ -222,6 +249,7 @@ def main(config_path: str = "configs/config.yaml"):
             use_quantization=model_cfg.get("use_quantization", True),
             lora_r=model_cfg.get("prover_lora_r", 8),
             lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+            preferred_device=prover_device,
         )
         use_reference_model = bool(train_cfg.get("use_reference_model", False))
         kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
@@ -233,6 +261,7 @@ def main(config_path: str = "configs/config.yaml"):
                 use_quantization=model_cfg.get("use_quantization", True),
                 lora_r=model_cfg.get("prover_lora_r", 8),
                 lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+                preferred_device=(reference_prover_device or prover_device),
             )
             base_prover.model.eval()
             for p in base_prover.model.parameters():

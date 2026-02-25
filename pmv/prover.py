@@ -40,8 +40,13 @@ class Prover(Model):
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
+        preferred_device: Optional[str] = None,
     ):
-        super().__init__(model_name, use_quantization=use_quantization)
+        super().__init__(
+            model_name,
+            use_quantization=use_quantization,
+            preferred_device=preferred_device,
+        )
 
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,

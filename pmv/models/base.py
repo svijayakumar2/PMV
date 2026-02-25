@@ -12,7 +12,14 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 
 class Model(nn.Module):
-    def __init__(self, model_name, role=None, use_quantization=True, quantization_config=None):
+    def __init__(
+        self,
+        model_name,
+        role=None,
+        use_quantization=True,
+        quantization_config=None,
+        preferred_device=None,
+    ):
         super().__init__()
         self.role = role
 
@@ -32,8 +39,34 @@ class Model(nn.Module):
             'cache_dir': cache_dir,
             'torch_dtype': torch.float16 if torch.cuda.is_available() else torch.float32,
             'trust_remote_code': True,
-            'device_map': 'auto',
         }
+
+        self.device = "cpu"
+        if torch.cuda.is_available():
+            if preferred_device is not None:
+                pd = str(preferred_device).strip()
+                if pd and pd.startswith("cuda"):
+                    gpu_count = torch.cuda.device_count()
+                    gpu_idx = 0
+                    if ":" in pd:
+                        try:
+                            gpu_idx = int(pd.split(":")[1])
+                        except Exception:
+                            gpu_idx = 0
+                    if gpu_idx < 0 or gpu_idx >= gpu_count:
+                        print(
+                            f"Requested device {pd} not available (gpu_count={gpu_count}); "
+                            "falling back to cuda:0."
+                        )
+                        pd = "cuda:0"
+                    load_kwargs['device_map'] = {"": pd}
+                    self.device = pd
+                else:
+                    load_kwargs['device_map'] = 'auto'
+                    self.device = "cuda:0"
+            else:
+                load_kwargs['device_map'] = 'auto'
+                self.device = "cuda:0"
 
         if use_quantization and torch.cuda.is_available():
             if quantization_config is None:
@@ -47,7 +80,6 @@ class Model(nn.Module):
             print(f"Loading {model_name} with 4-bit quantization")
 
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     @torch.no_grad()
     def generate(self, prompt, max_new_tokens=512, **kwargs):

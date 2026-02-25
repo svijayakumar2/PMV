@@ -35,6 +35,8 @@ BOOTSTRAP_EPISODES=${BOOTSTRAP_EPISODES:-80}
 BOOTSTRAP_ORACLE_EPISODES=${BOOTSTRAP_ORACLE_EPISODES:-80}
 COLLECT_EPISODES=${COLLECT_EPISODES:-100}
 HELPFUL_WARMUP_STEPS=${HELPFUL_WARMUP_STEPS:-80}
+PPO_TARGET_UPDATES_PER_ROUND=${PPO_TARGET_UPDATES_PER_ROUND:-0}
+ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-0}
 
 PROBE_EPISODES=${PROBE_EPISODES:-120}
 ATTACK_EPISODES=${ATTACK_EPISODES:-40}
@@ -60,6 +62,7 @@ echo "Prover model: ${PROVER_MODEL}"
 echo "Small verifier model: ${SMALL_VERIFIER_MODEL}"
 echo "Large verifier model: ${LARGE_VERIFIER_MODEL}"
 echo "Training overrides: rounds=${TRAIN_ROUNDS}, bootstrap=${BOOTSTRAP_EPISODES}, oracle=${BOOTSTRAP_ORACLE_EPISODES}, collect=${COLLECT_EPISODES}, warmup=${HELPFUL_WARMUP_STEPS}"
+echo "PPO overrides: target_updates_per_round=${PPO_TARGET_UPDATES_PER_ROUND}"
 echo "Eval: probe=${PROBE_EPISODES}, attack=${ATTACK_EPISODES}, temps=${EVAL_TEMPS}"
 echo "Output dir: ${OUT_DIR}"
 echo ""
@@ -73,6 +76,12 @@ if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
 fi
 if [ "${SAVE_PROBE_RECORDS}" = "1" ]; then
   EXTRA_ARGS+=("--save-probe-records")
+fi
+if [ "${PPO_TARGET_UPDATES_PER_ROUND}" -gt 0 ]; then
+  EXTRA_ARGS+=("--ppo-target-updates-per-round" "${PPO_TARGET_UPDATES_PER_ROUND}")
+fi
+if [ "${ENABLE_2GPU_ACCEL}" = "1" ]; then
+  EXTRA_ARGS+=("--enable-two-gpu-accel")
 fi
 
 # shellcheck disable=SC2086

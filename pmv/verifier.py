@@ -12,7 +12,7 @@ Verifiers PERSIST across rounds (Section 6.4).
 import re
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Optional
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -97,12 +97,14 @@ class DebatingVerifier(Model):
         lora_r: int = 16,
         lora_alpha: int = 32,
         lora_dropout: float = 0.1,
+        preferred_device: Optional[str] = None,
     ):
         role_info = ROLE_PROMPTS.get(role, {"name": "general", "focus": "Evaluate the solution carefully."})
         super().__init__(
             model_name,
             role=role_info,
             use_quantization=use_quantization,
+            preferred_device=preferred_device,
         )
         self.verifier_id = verifier_id
         self.verifier_type = role

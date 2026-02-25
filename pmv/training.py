@@ -15,6 +15,7 @@ Reward function per Equation (4).
 import json
 import math
 import random
+from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.nn.functional as F
 from typing import List, Tuple, Dict, Optional
@@ -740,6 +741,9 @@ def train_prover_ppo(
     clip_ratio = float(train_cfg.get("clip_ratio", 0.2))
     kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
     ppo_batch_size = int(train_cfg.get("ppo_batch_size", 8))
+    target_updates = int(train_cfg.get("ppo_target_updates_per_round", 0))
+    ppo_log_every = max(1, int(train_cfg.get("ppo_log_every", 100)))
+    ppo_parallel_reference_eval = bool(train_cfg.get("ppo_parallel_reference_eval", True))
     batch_size = min(max(1, ppo_batch_size), len(prompts))
     ppo_max_length = int(train_cfg.get("ppo_max_length", 1024))
 
@@ -754,92 +758,139 @@ def train_prover_ppo(
     else:
         advantages = rewards_t
 
-    with torch.no_grad():
-        old_lp = compute_log_probs_batch(
-            prover.model,
-            prover.tokenizer,
-            prompts,
-            responses,
-            prover.device,
-            max_length=ppo_max_length,
-        ).detach()
-        use_kl = base_prover is not None and kl_coeff > 0
-        if use_kl:
-            ref_lp = compute_log_probs_batch(
-                base_prover.model,
-                base_prover.tokenizer,
+    use_kl = base_prover is not None and kl_coeff > 0
+
+    def _compute_old_lp():
+        with torch.no_grad():
+            return compute_log_probs_batch(
+                prover.model,
+                prover.tokenizer,
                 prompts,
                 responses,
                 prover.device,
                 max_length=ppo_max_length,
             ).detach()
-        else:
-            ref_lp = None
 
-    for epoch in range(epochs):
-        prover.model.train()
-        indices = torch.randperm(len(prompts))
-        epoch_loss, n_updates = 0.0, 0
+    def _compute_ref_lp():
+        with torch.no_grad():
+            return compute_log_probs_batch(
+                base_prover.model,
+                base_prover.tokenizer,
+                prompts,
+                responses,
+                base_prover.device,
+                max_length=ppo_max_length,
+            ).detach().to(prover.device)
 
-        for bstart in range(0, len(prompts), batch_size):
-            bidx = indices[bstart:bstart + batch_size]
-            b_prompts = [prompts[i] for i in bidx]
-            b_responses = [responses[i] for i in bidx]
-            b_adv = advantages[bidx]
-            b_old = old_lp[bidx]
-            b_ref = ref_lp[bidx] if use_kl else None
+    if (
+        use_kl
+        and ppo_parallel_reference_eval
+        and base_prover is not None
+        and str(getattr(base_prover, "device", "")) != str(prover.device)
+    ):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            old_future = pool.submit(_compute_old_lp)
+            ref_future = pool.submit(_compute_ref_lp)
+            old_lp = old_future.result()
+            ref_lp = ref_future.result()
+    else:
+        old_lp = _compute_old_lp()
+        ref_lp = _compute_ref_lp() if use_kl else None
 
-            optimizer.zero_grad()
-            try:
-                new_lps = []
-                for p, r in zip(b_prompts, b_responses):
-                    full = p + r
-                    inp = prover.tokenizer(
-                        full, return_tensors="pt", truncation=True, max_length=ppo_max_length
-                    )
-                    inp = {k: v.to(prover.device) for k, v in inp.items()}
-                    p_ids = prover.tokenizer(
-                        p, return_tensors="pt", truncation=True, max_length=ppo_max_length
-                    )
-                    plen = p_ids["input_ids"].shape[1]
-                    logits = prover.model(**inp, use_cache=False).logits[0]
-                    if logits.shape[0] <= plen:
-                        new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
-                        continue
-                    rl = logits[plen - 1:-1]
-                    rt = inp["input_ids"][0, plen:]
-                    ml = min(rl.shape[0], rt.shape[0])
-                    if ml == 0:
-                        new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
-                        continue
-                    tlp = torch.log_softmax(rl[:ml].float(), dim=-1)
-                    sel = tlp.gather(1, rt[:ml].unsqueeze(1)).squeeze(1)
-                    new_lps.append(sel.sum())
+    def _ppo_update_batch(idx_list: List[int]) -> Optional[float]:
+        bidx = torch.tensor(idx_list, dtype=torch.long, device=prover.device)
+        b_prompts = [prompts[i] for i in idx_list]
+        b_responses = [responses[i] for i in idx_list]
+        b_adv = advantages[bidx]
+        b_old = old_lp[bidx]
+        b_ref = ref_lp[bidx] if use_kl else None
 
-                if not new_lps:
+        optimizer.zero_grad()
+        try:
+            new_lps = []
+            for p, r in zip(b_prompts, b_responses):
+                full = p + r
+                inp = prover.tokenizer(
+                    full, return_tensors="pt", truncation=True, max_length=ppo_max_length
+                )
+                inp = {k: v.to(prover.device) for k, v in inp.items()}
+                p_ids = prover.tokenizer(
+                    p, return_tensors="pt", truncation=True, max_length=ppo_max_length
+                )
+                plen = p_ids["input_ids"].shape[1]
+                logits = prover.model(**inp, use_cache=False).logits[0]
+                if logits.shape[0] <= plen:
+                    new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
                     continue
-                new_lp = torch.stack(new_lps)
-                log_ratios = new_lp - b_old
-                ratios = torch.exp(log_ratios.clamp(-20, 20))
-                clipped = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio)
-                policy_loss = -torch.min(ratios * b_adv, clipped * b_adv).mean()
-                total = policy_loss
-                if use_kl and b_ref is not None:
-                    # Keep KL penalty non-negative; one-sided penalties can cause collapse.
-                    kl_penalty = torch.mean((new_lp - b_ref) ** 2)
-                    total = total + kl_coeff * kl_penalty
-
-                if torch.isnan(total) or torch.isinf(total):
-                    optimizer.zero_grad()
+                rl = logits[plen - 1:-1]
+                rt = inp["input_ids"][0, plen:]
+                ml = min(rl.shape[0], rt.shape[0])
+                if ml == 0:
+                    new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
                     continue
-                total.backward()
-                torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
-                optimizer.step()
-                epoch_loss += total.item()
-                n_updates += 1
-            except Exception as e:
-                print(f"  PPO batch error: {e}")
+                tlp = torch.log_softmax(rl[:ml].float(), dim=-1)
+                sel = tlp.gather(1, rt[:ml].unsqueeze(1)).squeeze(1)
+                new_lps.append(sel.sum())
+
+            if not new_lps:
+                return None
+            new_lp = torch.stack(new_lps)
+            log_ratios = new_lp - b_old
+            ratios = torch.exp(log_ratios.clamp(-20, 20))
+            clipped = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio)
+            policy_loss = -torch.min(ratios * b_adv, clipped * b_adv).mean()
+            total = policy_loss
+            if use_kl and b_ref is not None:
+                # Keep KL penalty non-negative; one-sided penalties can cause collapse.
+                kl_penalty = torch.mean((new_lp - b_ref) ** 2)
+                total = total + kl_coeff * kl_penalty
+
+            if torch.isnan(total) or torch.isinf(total):
                 optimizer.zero_grad()
+                return None
+            total.backward()
+            torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
+            optimizer.step()
+            return float(total.item())
+        except Exception as e:
+            print(f"  PPO batch error: {e}")
+            optimizer.zero_grad()
+            return None
 
+    if target_updates > 0:
+        prover.model.train()
+        running_loss = 0.0
+        n_updates = 0
+        print(
+            f"  PPO fixed-update mode: target_updates={target_updates}, "
+            f"batch_size={batch_size}"
+        )
+        for step in range(target_updates):
+            idx_list = [random.randrange(len(prompts)) for _ in range(batch_size)]
+            loss_val = _ppo_update_batch(idx_list)
+            if loss_val is None:
+                continue
+            running_loss += loss_val
+            n_updates += 1
+            if (step + 1) % ppo_log_every == 0:
+                avg = running_loss / max(1, n_updates)
+                print(f"  PPO update {step+1}/{target_updates}, avg loss: {avg:.4f}")
+                cleanup_memory()
         if n_updates > 0:
-            print(f"  PPO epoch {epoch+1}/{epochs}, loss: {epoch_loss / n_updates:.4f}")
+            print(f"  PPO complete: {n_updates}/{target_updates} updates, avg loss: {running_loss / n_updates:.4f}")
+    else:
+        for epoch in range(epochs):
+            prover.model.train()
+            indices = torch.randperm(len(prompts))
+            epoch_loss, n_updates = 0.0, 0
+
+            for bstart in range(0, len(prompts), batch_size):
+                bidx = indices[bstart:bstart + batch_size].tolist()
+                loss_val = _ppo_update_batch(bidx)
+                if loss_val is None:
+                    continue
+                epoch_loss += loss_val
+                n_updates += 1
+
+            if n_updates > 0:
+                print(f"  PPO epoch {epoch+1}/{epochs}, loss: {epoch_loss / n_updates:.4f}")

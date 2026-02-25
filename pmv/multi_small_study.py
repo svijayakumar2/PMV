@@ -114,6 +114,8 @@ def main():
     parser.add_argument("--bootstrap-oracle-episodes", type=int, default=None)
     parser.add_argument("--collect-episodes", type=int, default=None)
     parser.add_argument("--helpful-warmup-steps", type=int, default=None)
+    parser.add_argument("--ppo-target-updates-per-round", type=int, default=None)
+    parser.add_argument("--enable-two-gpu-accel", action="store_true")
 
     # Eval settings.
     parser.add_argument("--probe-episodes", type=int, default=120)
@@ -182,6 +184,13 @@ def main():
             cfg["training"]["collect_episodes"] = int(args.collect_episodes)
         if args.helpful_warmup_steps is not None:
             cfg["training"]["helpful_warmup_steps"] = int(args.helpful_warmup_steps)
+        if args.ppo_target_updates_per_round is not None:
+            cfg["training"]["ppo_target_updates_per_round"] = int(args.ppo_target_updates_per_round)
+        if args.enable_two_gpu_accel:
+            cfg["training"]["multi_gpu_verifier_parallel"] = True
+            cfg["training"]["parallel_verifier_inference"] = True
+            cfg["training"]["split_reference_gpu"] = True
+            cfg["training"]["ppo_parallel_reference_eval"] = True
 
         cfg_path = output_dir / f"config_{vid}.yaml"
         with cfg_path.open("w") as f:
@@ -254,6 +263,7 @@ def main():
                 "bootstrap_oracle_episodes": cfg.get("training", {}).get("bootstrap_oracle_episodes"),
                 "collect_episodes": cfg.get("training", {}).get("collect_episodes"),
                 "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
+                "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
                 "probe_episodes": args.probe_episodes,
                 "attack_episodes": args.attack_episodes,
                 "helpful_correctness": rates.get("helpful_correctness"),
@@ -283,6 +293,8 @@ def main():
             "bootstrap_oracle_episodes": args.bootstrap_oracle_episodes,
             "collect_episodes": args.collect_episodes,
             "helpful_warmup_steps": args.helpful_warmup_steps,
+            "ppo_target_updates_per_round": args.ppo_target_updates_per_round,
+            "enable_two_gpu_accel": args.enable_two_gpu_accel,
             "probe_episodes": args.probe_episodes,
             "attack_episodes": args.attack_episodes,
             "probe_max_new_tokens": args.probe_max_new_tokens,

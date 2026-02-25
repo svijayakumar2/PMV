@@ -50,9 +50,17 @@ training:
   prover_lr: 1.0e-5
   ppo_epochs: 4
   ppo_batch_size: 8
+  # Optional fixed PPO optimizer budget per round; set >0 (e.g., 8000) to
+  # override epoch-based updates.
+  ppo_target_updates_per_round: 0
+  ppo_log_every: 200
   clip_ratio: 0.1
   kl_coeff: 0.1
   use_reference_model: true
+  # If two GPUs are available, place reference prover on a different GPU
+  # and precompute ref logprobs in parallel.
+  split_reference_gpu: true
+  ppo_parallel_reference_eval: true
 
   helpful_do_sample: false
   helpful_temperature: 0.2
@@ -76,6 +84,9 @@ training:
   sneaky_margin_scale: 1.0
   sneaky_correct_penalty: -1.0
   supervised_single_identity: true
+  # Multi-GPU verifier acceleration knobs.
+  multi_gpu_verifier_parallel: true
+  parallel_verifier_inference: true
 
   oversight_decision_threshold: 0.5
   verifier_decision_threshold: 0.5

@@ -5,6 +5,7 @@ Verifiers PERSIST across rounds (Section 6.4). Only the prover resets.
 This implementation uses direct scoring only (no debate step).
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import torch
 from typing import List, Tuple, Dict, Optional
 
@@ -31,6 +32,36 @@ class VerifierEnsemble:
         self.supervised_single_identity = bool(
             train_cfg.get("supervised_single_identity", True)
         )
+        self.multi_gpu_verifier_parallel = bool(
+            train_cfg.get("multi_gpu_verifier_parallel", True)
+        )
+        self.parallel_verifier_inference = bool(
+            train_cfg.get("parallel_verifier_inference", True)
+        )
+
+        self.verifier_devices: List[Optional[str]] = [None for _ in range(self.num_verifiers)]
+        available_gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        explicit_devices = train_cfg.get("verifier_devices")
+        parsed_explicit_devices: List[str] = []
+        if isinstance(explicit_devices, str):
+            parsed_explicit_devices = [d.strip() for d in explicit_devices.split(",") if d.strip()]
+        elif isinstance(explicit_devices, list):
+            parsed_explicit_devices = [str(d).strip() for d in explicit_devices if str(d).strip()]
+
+        if parsed_explicit_devices:
+            self.verifier_devices = [
+                parsed_explicit_devices[i % len(parsed_explicit_devices)]
+                for i in range(self.num_verifiers)
+            ]
+        elif (
+            self.multi_gpu_verifier_parallel
+            and available_gpu_count > 1
+            and self.num_verifiers > 1
+        ):
+            self.verifier_devices = [
+                f"cuda:{i % available_gpu_count}"
+                for i in range(self.num_verifiers)
+            ]
         configured_verifier_max_length = int(train_cfg.get("verifier_max_length", 512))
         auto_adjust_verifier_max_length = bool(
             train_cfg.get("auto_adjust_verifier_max_length", True)
@@ -63,6 +94,8 @@ class VerifierEnsemble:
             and not self.use_identity_supervised_single
         )
         agg_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        if self.verifier_devices and self.verifier_devices[0]:
+            agg_device = self.verifier_devices[0]
         self.aggregator_device = agg_device
 
         if self.use_learned_aggregator:
@@ -79,6 +112,11 @@ class VerifierEnsemble:
             self.aggregator_optimizer = None
             if self.use_identity_supervised_single:
                 print("  Using identity aggregation for supervised single-verifier mode.")
+
+        if any(d is not None for d in self.verifier_devices):
+            print(f"  Verifier devices: {self.verifier_devices}")
+        if self.parallel_verifier_inference and available_gpu_count > 1 and self.num_verifiers > 1:
+            print("  Parallel verifier inference is enabled.")
 
         self.verifiers: List[DebatingVerifier] = []
 
@@ -122,6 +160,7 @@ class VerifierEnsemble:
                 use_quantization=self.use_quantization,
                 lora_r=self.lora_r,
                 lora_alpha=self.lora_alpha,
+                preferred_device=self.verifier_devices[i] if i < len(self.verifier_devices) else None,
             )
             v.score_max_length = self.verifier_max_length
             self.verifiers.append(v)
@@ -139,11 +178,38 @@ class VerifierEnsemble:
         self, problem: str, solution: str, transcript: str = "",
     ) -> Tuple[List[float], float]:
         """Inference-only oversight score (no gradients). Uses score head for alignment with training."""
-        scores = []
-        for v in self.verifiers:
-            s = v.compute_score(problem, solution, transcript=transcript, training=False, use_head=True)
-            scores.append(float(s.item()))
+        scores: List[float] = []
+        unique_devices = {
+            str(d)
+            for d in self.verifier_devices
+            if d is not None and str(d).startswith("cuda")
+        }
+        use_parallel = (
+            self.parallel_verifier_inference
+            and len(self.verifiers) > 1
+            and len(unique_devices) > 1
+        )
+
+        if use_parallel:
+            def _score_one(v):
+                s = v.compute_score(
+                    problem,
+                    solution,
+                    transcript=transcript,
+                    training=False,
+                    use_head=True,
+                )
+                return float(s.item())
+
+            with ThreadPoolExecutor(max_workers=len(self.verifiers)) as pool:
+                futures = [pool.submit(_score_one, v) for v in self.verifiers]
+                scores = [f.result() for f in futures]
             cleanup_memory()
+        else:
+            for v in self.verifiers:
+                s = v.compute_score(problem, solution, transcript=transcript, training=False, use_head=True)
+                scores.append(float(s.item()))
+                cleanup_memory()
         return scores, self._aggregate_scores(scores)
 
     def compute_oversight_score_training(
