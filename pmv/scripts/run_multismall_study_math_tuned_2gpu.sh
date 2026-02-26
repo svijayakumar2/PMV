@@ -46,7 +46,7 @@ SKIP_ADVERSARIAL=${SKIP_ADVERSARIAL:-0}
 SAVE_PROBE_RECORDS=${SAVE_PROBE_RECORDS:-0}
 
 RUN_STAMP=${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}
-OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_STAMP}_${LSB_JOBID:-local}}
+OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_STAMP}}
 
 echo "Job started at: $(date)"
 echo "Host: $(hostname)"

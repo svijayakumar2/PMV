@@ -18,7 +18,7 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.nn.functional as F
-from typing import List, Tuple, Dict, Optional
+from typing import Callable, List, Tuple, Dict, Optional
 
 from pmv.data import SolutionRecord, ReplayBuffer
 from pmv.ensemble import VerifierEnsemble
@@ -729,6 +729,8 @@ def train_prover_ppo(
     rewards: List[float],
     config: Dict,
     base_prover: Prover = None,
+    resume_update_idx: int = 0,
+    on_progress_update: Optional[Callable[[int], None]] = None,
 ):
     """PPO training for prover (Algorithm 2 / Equation 5)."""
     if not prompts:
@@ -861,17 +863,22 @@ def train_prover_ppo(
         prover.model.train()
         running_loss = 0.0
         n_updates = 0
+        start_update = max(0, int(resume_update_idx))
         print(
             f"  PPO fixed-update mode: target_updates={target_updates}, "
-            f"batch_size={batch_size}"
+            f"batch_size={batch_size}, start_update={start_update}"
         )
-        for step in range(target_updates):
+        for step in range(start_update, target_updates):
             idx_list = [random.randrange(len(prompts)) for _ in range(batch_size)]
             loss_val = _ppo_update_batch(idx_list)
             if loss_val is None:
+                if on_progress_update is not None:
+                    on_progress_update(step + 1)
                 continue
             running_loss += loss_val
             n_updates += 1
+            if on_progress_update is not None:
+                on_progress_update(step + 1)
             if (step + 1) % ppo_log_every == 0:
                 avg = running_loss / max(1, n_updates)
                 print(f"  PPO update {step+1}/{target_updates}, avg loss: {avg:.4f}")
