@@ -78,6 +78,10 @@ def _write_csv(path: Path, rows: List[Dict]):
         "separation",
         "n_correct",
         "n_incorrect",
+        "goal_auroc",
+        "goal_center_sneaky_conditional_fool_rate",
+        "goal_center_helpful_correct_accept_rate",
+        "goal_sensitivity_pm0p02",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
@@ -264,6 +268,7 @@ def main():
             d = json.load(f)
         rates = d.get("probe_metrics", {}).get("rates", {})
         oq = d.get("oversight_quality", {})
+        goal_summary = d.get("goal_robustness", {}).get("summary", {})
         fool_key = next((k for k in rates if k.startswith("sneaky_fool_rate@")), None)
 
         summary_rows.append(
@@ -288,6 +293,15 @@ def main():
                 "separation": oq.get("separation"),
                 "n_correct": oq.get("n_correct"),
                 "n_incorrect": oq.get("n_incorrect"),
+                "goal_auroc": goal_summary.get("auroc_correct_vs_incorrect"),
+                "goal_center_sneaky_conditional_fool_rate": goal_summary.get("center_sneaky_conditional_fool_rate"),
+                "goal_center_helpful_correct_accept_rate": goal_summary.get("center_helpful_correct_accept_rate"),
+                "goal_sensitivity_pm0p02": (
+                    goal_summary.get("sensitivity_band_range_pm0.02", {})
+                    .get("sneaky_conditional_fool_rate")
+                    if isinstance(goal_summary.get("sensitivity_band_range_pm0.02"), dict)
+                    else None
+                ),
             }
         )
 

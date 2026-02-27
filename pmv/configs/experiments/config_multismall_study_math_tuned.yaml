@@ -78,7 +78,7 @@ training:
   collect_early_min_episodes: 80
   collect_early_stop_epsilon: 0.05
   collect_paired_roles: true
-  sneaky_retries_for_incorrect: 3
+  sneaky_retries_for_incorrect: 2
   sneaky_select_hard_negative: true
   sneaky_max_new_tokens: 512
   helpful_warmup_max_length: 1024

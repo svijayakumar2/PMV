@@ -730,33 +730,83 @@ def collect_prover_experiences(
     return prompts, responses, rewards, records
 
 
-def compute_log_probs_batch(model, tokenizer, prompts, responses, device, max_length: int = 1024):
-    log_probs = []
-    model.eval()
-    for prompt, response in zip(prompts, responses):
-        try:
-            full = prompt + response
-            inp = tokenizer(full, return_tensors="pt", truncation=True, max_length=max_length)
-            inp = {k: v.to(device) for k, v in inp.items()}
-            p_ids = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=max_length)
-            plen = p_ids["input_ids"].shape[1]
-            with torch.no_grad():
-                logits = model(**inp, use_cache=False).logits[0]
-            if logits.shape[0] <= plen:
-                log_probs.append(torch.tensor(-10.0, device=device))
-                continue
-            rl = logits[plen - 1:-1]
-            rt = inp["input_ids"][0, plen:]
-            ml = min(rl.shape[0], rt.shape[0])
-            if ml == 0:
-                log_probs.append(torch.tensor(-10.0, device=device))
-                continue
-            tlp = torch.log_softmax(rl[:ml].float(), dim=-1)
-            sel = tlp.gather(1, rt[:ml].unsqueeze(1)).squeeze(1)
-            log_probs.append(sel.sum())
-        except Exception:
-            log_probs.append(torch.tensor(-10.0, device=device))
-    return torch.stack(log_probs) if log_probs else torch.tensor([-10.0], device=device)
+def compute_log_probs_batch(
+    model,
+    tokenizer,
+    prompts,
+    responses,
+    device,
+    max_length: int = 1024,
+    require_grad: bool = False,
+    forward_batch_size: Optional[int] = None,
+):
+    """
+    Compute sequence log-probabilities log p(response | prompt) for a list of samples.
+    Uses true batched forward passes for throughput.
+    """
+    if not prompts:
+        return torch.tensor([-10.0], device=device, requires_grad=require_grad)
+
+    eff_bs = max(1, int(forward_batch_size or len(prompts)))
+    seq_log_probs = []
+    grad_ctx = torch.enable_grad() if require_grad else torch.no_grad()
+
+    with grad_ctx:
+        for start in range(0, len(prompts), eff_bs):
+            p_chunk = prompts[start:start + eff_bs]
+            r_chunk = responses[start:start + eff_bs]
+            full_chunk = [p + r for p, r in zip(p_chunk, r_chunk)]
+
+            try:
+                full_tok = tokenizer(
+                    full_chunk,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=max_length,
+                    padding=True,
+                )
+                full_tok = {k: v.to(device) for k, v in full_tok.items()}
+
+                prompt_tok = tokenizer(
+                    p_chunk,
+                    truncation=True,
+                    max_length=max_length,
+                    padding=False,
+                )
+                prompt_lens = [len(ids) for ids in prompt_tok.get("input_ids", [])]
+
+                logits = model(**full_tok, use_cache=False).logits  # [B, T, V]
+                token_log_probs = torch.log_softmax(logits[:, :-1, :].float(), dim=-1)
+                target_ids = full_tok["input_ids"][:, 1:]
+                gathered = token_log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)  # [B, T-1]
+
+                attn = full_tok.get("attention_mask")
+                if attn is None:
+                    attn = torch.ones_like(full_tok["input_ids"], device=device)
+                valid_next = attn[:, 1:].bool()
+                seq_positions = torch.arange(gathered.shape[1], device=device)
+
+                for i, plen in enumerate(prompt_lens):
+                    # gathered position j predicts token at full position j+1.
+                    # Response starts at full position plen.
+                    resp_from = max(0, int(plen) - 1)
+                    resp_mask = seq_positions >= resp_from
+                    token_mask = valid_next[i] & resp_mask
+                    if token_mask.any():
+                        seq_log_probs.append(gathered[i][token_mask].sum())
+                    else:
+                        seq_log_probs.append(
+                            torch.tensor(-10.0, device=device, requires_grad=require_grad)
+                        )
+            except Exception:
+                for _ in p_chunk:
+                    seq_log_probs.append(
+                        torch.tensor(-10.0, device=device, requires_grad=require_grad)
+                    )
+
+    if not seq_log_probs:
+        return torch.tensor([-10.0], device=device, requires_grad=require_grad)
+    return torch.stack(seq_log_probs)
 
 
 def train_prover_ppo(
@@ -780,6 +830,7 @@ def train_prover_ppo(
     clip_ratio = float(train_cfg.get("clip_ratio", 0.2))
     kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
     ppo_batch_size = int(train_cfg.get("ppo_batch_size", 8))
+    ppo_forward_batch_size = int(train_cfg.get("ppo_forward_batch_size", ppo_batch_size))
     target_updates = int(train_cfg.get("ppo_target_updates_per_round", 0))
     ppo_log_every = max(1, int(train_cfg.get("ppo_log_every", 100)))
     ppo_parallel_reference_eval = bool(train_cfg.get("ppo_parallel_reference_eval", True))
@@ -817,6 +868,8 @@ def train_prover_ppo(
                 responses,
                 prover.device,
                 max_length=ppo_max_length,
+                require_grad=False,
+                forward_batch_size=ppo_forward_batch_size,
             ).detach()
 
     def _compute_ref_lp():
@@ -828,6 +881,8 @@ def train_prover_ppo(
                 responses,
                 base_prover.device,
                 max_length=ppo_max_length,
+                require_grad=False,
+                forward_batch_size=ppo_forward_batch_size,
             ).detach().to(prover.device)
 
     if (
@@ -855,34 +910,18 @@ def train_prover_ppo(
 
         optimizer.zero_grad()
         try:
-            new_lps = []
-            for p, r in zip(b_prompts, b_responses):
-                full = p + r
-                inp = prover.tokenizer(
-                    full, return_tensors="pt", truncation=True, max_length=ppo_max_length
-                )
-                inp = {k: v.to(prover.device) for k, v in inp.items()}
-                p_ids = prover.tokenizer(
-                    p, return_tensors="pt", truncation=True, max_length=ppo_max_length
-                )
-                plen = p_ids["input_ids"].shape[1]
-                logits = prover.model(**inp, use_cache=False).logits[0]
-                if logits.shape[0] <= plen:
-                    new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
-                    continue
-                rl = logits[plen - 1:-1]
-                rt = inp["input_ids"][0, plen:]
-                ml = min(rl.shape[0], rt.shape[0])
-                if ml == 0:
-                    new_lps.append(torch.tensor(-10.0, device=prover.device, requires_grad=True))
-                    continue
-                tlp = torch.log_softmax(rl[:ml].float(), dim=-1)
-                sel = tlp.gather(1, rt[:ml].unsqueeze(1)).squeeze(1)
-                new_lps.append(sel.sum())
-
-            if not new_lps:
+            new_lp = compute_log_probs_batch(
+                prover.model,
+                prover.tokenizer,
+                b_prompts,
+                b_responses,
+                prover.device,
+                max_length=ppo_max_length,
+                require_grad=True,
+                forward_batch_size=min(len(b_prompts), ppo_forward_batch_size),
+            )
+            if new_lp.numel() == 0:
                 return None
-            new_lp = torch.stack(new_lps)
             log_ratios = new_lp - b_old
             ratios = torch.exp(log_ratios.clamp(-20, 20))
             clipped = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio)

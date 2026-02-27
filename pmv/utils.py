@@ -6,6 +6,8 @@ import gc
 import torch
 from typing import List, Optional
 
+_CLEANUP_CALL_COUNT = 0
+
 
 def get_available_gpus() -> List[int]:
     if not torch.cuda.is_available():
@@ -19,20 +21,39 @@ def get_device_for_index(idx: int, num_gpus: int) -> str:
     return f"cuda:{idx % num_gpus}"
 
 
-def cleanup_memory(device: Optional[str] = None):
+def cleanup_memory(
+    device: Optional[str] = None,
+    aggressive: bool = False,
+    sync: bool = False,
+    empty_cache_every: int = 25,
+):
+    """
+    Lightweight cleanup by default to avoid hot-path stalls.
+    - Non-aggressive mode: only empties CUDA cache every N calls.
+    - Aggressive mode: always empties cache (and optionally synchronizes).
+    """
+    global _CLEANUP_CALL_COUNT
     gc.collect()
     if not torch.cuda.is_available():
         return
+    _CLEANUP_CALL_COUNT += 1
+    if not aggressive:
+        interval = max(1, int(empty_cache_every))
+        if (_CLEANUP_CALL_COUNT % interval) != 0:
+            return
+
+    gpu_indices = []
     if device and device.startswith("cuda"):
         gpu_idx = int(device.split(":")[1]) if ":" in device else 0
-        with torch.cuda.device(gpu_idx):
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+        gpu_indices = [gpu_idx]
     else:
-        for i in range(torch.cuda.device_count()):
-            with torch.cuda.device(i):
+        gpu_indices = list(range(torch.cuda.device_count()))
+
+    for i in gpu_indices:
+        with torch.cuda.device(i):
+            if sync:
                 torch.cuda.synchronize()
-                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
 
 def delete_model(model, device: Optional[str] = None):
@@ -46,4 +67,4 @@ def delete_model(model, device: Optional[str] = None):
     except Exception:
         pass
     del model
-    cleanup_memory(device)
+    cleanup_memory(device=device, aggressive=True, sync=False)
