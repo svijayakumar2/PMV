@@ -15,6 +15,7 @@ Reward function per Equation (4).
 import json
 import math
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.nn.functional as F
@@ -539,6 +540,10 @@ def collect_prover_experiences(
     collect_paired_roles = bool(train_cfg.get("collect_paired_roles", False))
     sneaky_retries_for_incorrect = int(train_cfg.get("sneaky_retries_for_incorrect", 1))
     sneaky_select_hard_negative = bool(train_cfg.get("sneaky_select_hard_negative", True))
+    collect_early_stop_enable = bool(train_cfg.get("collect_early_stop_enable", False))
+    collect_early_check_every = max(1, int(train_cfg.get("collect_early_check_every", 20)))
+    collect_early_min_episodes = max(1, int(train_cfg.get("collect_early_min_episodes", 80)))
+    collect_early_stop_epsilon = float(train_cfg.get("collect_early_stop_epsilon", 0.05))
 
     prompts, responses, rewards, records = [], [], [], []
     prover.model.eval()
@@ -678,6 +683,38 @@ def collect_prover_experiences(
                 f"  Episode {ep+1}/{num_episodes}, role={role}, "
                 f"correct={is_correct}, f={f_score:.3f}, r={r:.3f}"
             )
+        if (
+            collect_early_stop_enable
+            and (ep + 1) >= collect_early_min_episodes
+            and ((ep + 1) % collect_early_check_every == 0)
+        ):
+            helpful_total_so_far = sum(1 for rec in records if rec.role == "helpful")
+            helpful_correct_so_far = sum(
+                1 for rec in records if rec.role == "helpful" and rec.correctness >= 0.5
+            )
+            sneaky_total_so_far = sum(1 for rec in records if rec.role == "sneaky")
+            sneaky_fooled_so_far = sum(
+                1
+                for rec in records
+                if rec.role == "sneaky"
+                and rec.correctness < 0.5
+                and rec.oversight_score is not None
+                and rec.oversight_score >= fool_threshold
+            )
+            helpful_pass_rate = (
+                helpful_correct_so_far / helpful_total_so_far if helpful_total_so_far > 0 else 0.0
+            )
+            sneaky_fool_rate = (
+                sneaky_fooled_so_far / sneaky_total_so_far if sneaky_total_so_far > 0 else 0.0
+            )
+            if helpful_total_so_far >= 10 and sneaky_total_so_far >= 10:
+                if sneaky_fool_rate >= (helpful_pass_rate - collect_early_stop_epsilon):
+                    print(
+                        "  Early stop collection: "
+                        f"sneaky_fool_rate={sneaky_fool_rate:.3f} >= "
+                        f"helpful_pass_rate-eps={helpful_pass_rate - collect_early_stop_epsilon:.3f}"
+                    )
+                    break
         cleanup_memory()
 
     final_rate = final_line_count / max(1, num_episodes)
@@ -746,6 +783,15 @@ def train_prover_ppo(
     target_updates = int(train_cfg.get("ppo_target_updates_per_round", 0))
     ppo_log_every = max(1, int(train_cfg.get("ppo_log_every", 100)))
     ppo_parallel_reference_eval = bool(train_cfg.get("ppo_parallel_reference_eval", True))
+    ppo_early_stop_enable = bool(train_cfg.get("ppo_early_stop_enable", False))
+    ppo_early_stop_patience_windows = max(
+        1, int(train_cfg.get("ppo_early_stop_patience_windows", 4))
+    )
+    ppo_early_stop_min_delta = float(train_cfg.get("ppo_early_stop_min_delta", 5e-4))
+    ppo_early_stop_warmup_updates = max(
+        0, int(train_cfg.get("ppo_early_stop_warmup_updates", 1000))
+    )
+    ppo_max_wall_time_seconds = max(0, int(train_cfg.get("ppo_max_wall_time_seconds", 0)))
     batch_size = min(max(1, ppo_batch_size), len(prompts))
     ppo_max_length = int(train_cfg.get("ppo_max_length", 1024))
 
@@ -864,11 +910,23 @@ def train_prover_ppo(
         running_loss = 0.0
         n_updates = 0
         start_update = max(0, int(resume_update_idx))
+        loop_start_t = time.time()
+        best_window_avg = None
+        stale_windows = 0
         print(
             f"  PPO fixed-update mode: target_updates={target_updates}, "
             f"batch_size={batch_size}, start_update={start_update}"
         )
         for step in range(start_update, target_updates):
+            if (
+                ppo_max_wall_time_seconds > 0
+                and (time.time() - loop_start_t) >= ppo_max_wall_time_seconds
+            ):
+                print(
+                    "  PPO early stop by wall-time budget: "
+                    f"{int(time.time() - loop_start_t)}s >= {ppo_max_wall_time_seconds}s"
+                )
+                break
             idx_list = [random.randrange(len(prompts)) for _ in range(batch_size)]
             loss_val = _ppo_update_batch(idx_list)
             if loss_val is None:
@@ -882,6 +940,19 @@ def train_prover_ppo(
             if (step + 1) % ppo_log_every == 0:
                 avg = running_loss / max(1, n_updates)
                 print(f"  PPO update {step+1}/{target_updates}, avg loss: {avg:.4f}")
+                if ppo_early_stop_enable and (step + 1) >= ppo_early_stop_warmup_updates:
+                    if best_window_avg is None or avg < (best_window_avg - ppo_early_stop_min_delta):
+                        best_window_avg = avg
+                        stale_windows = 0
+                    else:
+                        stale_windows += 1
+                        if stale_windows >= ppo_early_stop_patience_windows:
+                            print(
+                                "  PPO early stop on plateau: "
+                                f"avg_loss={avg:.4f}, best={best_window_avg:.4f}, "
+                                f"stale_windows={stale_windows}"
+                            )
+                            break
                 cleanup_memory()
         if n_updates > 0:
             print(f"  PPO complete: {n_updates}/{target_updates} updates, avg loss: {running_loss / n_updates:.4f}")

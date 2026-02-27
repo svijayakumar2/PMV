@@ -34,9 +34,9 @@ training:
   verifier_lr: 1.0e-4
   verifier_epochs: 3
   verifier_batch_size: 8
-  verifier_max_length: 1024
+  verifier_max_length: 768
   auto_adjust_verifier_max_length: true
-  verifier_prompt_margin: 512
+  verifier_prompt_margin: 256
   phase1_micro_step: false
   phase1_balance_labels: true
   phase1_stratified_batches: true
@@ -54,7 +54,12 @@ training:
   # override epoch-based updates.
   ppo_target_updates_per_round: 0
   ppo_log_every: 200
-  ppo_resume_checkpoint_interval: 200
+  ppo_resume_checkpoint_interval: 100
+  ppo_early_stop_enable: true
+  ppo_early_stop_patience_windows: 4
+  ppo_early_stop_min_delta: 5.0e-4
+  ppo_early_stop_warmup_updates: 1000
+  ppo_max_wall_time_seconds: 0
   clip_ratio: 0.1
   kl_coeff: 0.1
   use_reference_model: true
@@ -65,15 +70,19 @@ training:
 
   helpful_do_sample: false
   helpful_temperature: 0.2
-  helpful_max_new_tokens: 768
+  helpful_max_new_tokens: 512
   sneaky_do_sample: true
   sneaky_temperature: 0.9
+  collect_early_stop_enable: true
+  collect_early_check_every: 20
+  collect_early_min_episodes: 80
+  collect_early_stop_epsilon: 0.05
   collect_paired_roles: true
   sneaky_retries_for_incorrect: 3
   sneaky_select_hard_negative: true
-  sneaky_max_new_tokens: 768
-  helpful_warmup_max_length: 1536
-  ppo_max_length: 1536
+  sneaky_max_new_tokens: 512
+  helpful_warmup_max_length: 1024
+  ppo_max_length: 1024
 
   # Canonical role-alignment reward from the architecture.
   reward_mode: "affine"
