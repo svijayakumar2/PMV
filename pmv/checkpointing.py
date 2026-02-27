@@ -10,6 +10,18 @@ from typing import Optional
 import torch
 
 
+def _load_trusted_checkpoint(path: str):
+    """
+    Load internal PMV checkpoints that may contain Python objects (e.g., SolutionRecord).
+    PyTorch >=2.6 defaults to weights_only=True, so explicitly disable it here.
+    """
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        # Backward compatibility for older torch versions without weights_only.
+        return torch.load(path, map_location="cpu")
+
+
 def save_checkpoint(
     path: str,
     round_idx: int,
@@ -40,7 +52,7 @@ def load_checkpoint(
     prover=None,
     strict: bool = True,
 ):
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = _load_trusted_checkpoint(path)
     if ensemble is not None and "ensemble" in ckpt:
         ensemble.load_state_dict_checkpoint(ckpt["ensemble"], strict=strict)
     if prover is not None and "prover" in ckpt:
@@ -74,7 +86,7 @@ def load_prover_checkpoint(
     prover=None,
     strict: bool = True,
 ):
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = _load_trusted_checkpoint(path)
     if prover is not None and "prover" in ckpt:
         prover.load_state_dict_checkpoint(ckpt["prover"], strict=strict)
     return ckpt
