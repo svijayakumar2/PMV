@@ -70,7 +70,7 @@ fi
 
 # shellcheck disable=SC2086
 python3 -u -m pmv.evaluation \
-  --config "${CONFIG_PATH}" \
+  "${CONFIG_PATH}" \
   --output "${OUTPUT_JSON}" \
   --probe-episodes "${PROBE_EPISODES}" \
   --attack-episodes "${ATTACK_EPISODES}" \

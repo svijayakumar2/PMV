@@ -14,12 +14,17 @@ Reward function per Equation (4).
 
 import json
 import math
+import os
 import random
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
+import torch.multiprocessing as mp
 from typing import Callable, List, Tuple, Dict, Optional
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from pmv.data import SolutionRecord, ReplayBuffer
 from pmv.ensemble import VerifierEnsemble
@@ -30,6 +35,7 @@ from pmv.prover import (
 )
 from pmv.oversight import OPTIMIZED_RULES, h_supervised, verifier_softmin_loss
 from pmv.utils import cleanup_memory
+from pmv.checkpointing import save_prover_checkpoint, load_prover_checkpoint
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +815,233 @@ def compute_log_probs_batch(
     return torch.stack(seq_log_probs)
 
 
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _dist_setup(rank: int, world_size: int, master_port: int):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        backend="nccl",
+        rank=rank,
+        world_size=world_size,
+    )
+
+
+def _dist_cleanup():
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
+    prover = None
+    try:
+        _dist_setup(rank=rank, world_size=world_size, master_port=int(worker["master_port"]))
+
+        model_cfg = worker["model_cfg"]
+        train_cfg = worker["train_cfg"]
+        prompts = worker["prompts"]
+        responses = worker["responses"]
+        rewards = worker["rewards"]
+        old_lp_cpu = worker["old_lp"]
+        ref_lp_cpu = worker.get("ref_lp")
+        checkpoint_path = worker.get("checkpoint_path")
+        config_path = worker.get("config_path")
+        round_idx = int(worker.get("round_idx", 0))
+
+        device = f"cuda:{rank}"
+        prover = Prover(
+            model_name=model_cfg["prover_model"],
+            use_quantization=model_cfg.get("use_quantization", True),
+            lora_r=model_cfg.get("prover_lora_r", 8),
+            lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+            preferred_device=device,
+        )
+        prover.load_state_dict_checkpoint({"model_state": worker["initial_model_state"]}, strict=False)
+        prover.model.train()
+        ddp_model = DDP(
+            prover.model,
+            device_ids=[rank],
+            output_device=rank,
+            broadcast_buffers=False,
+            find_unused_parameters=False,
+        )
+        prover.model = ddp_model
+
+        lr = float(train_cfg.get("prover_lr", 1e-5))
+        clip_ratio = float(train_cfg.get("clip_ratio", 0.2))
+        kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
+        ppo_batch_size = int(train_cfg.get("ppo_batch_size", 8))
+        ppo_forward_batch_size = int(train_cfg.get("ppo_forward_batch_size", ppo_batch_size))
+        target_updates = int(train_cfg.get("ppo_target_updates_per_round", 0))
+        ppo_log_every = max(1, int(train_cfg.get("ppo_log_every", 100)))
+        ppo_max_length = int(train_cfg.get("ppo_max_length", 1024))
+        ppo_resume_checkpoint_interval = max(
+            1, int(train_cfg.get("ppo_resume_checkpoint_interval", 200))
+        )
+        start_update = max(0, int(worker.get("resume_update_idx", 0)))
+        ppo_max_wall_time_seconds = max(0, int(train_cfg.get("ppo_max_wall_time_seconds", 0)))
+        global_stop_time = float(worker.get("global_stop_time", 0.0) or 0.0)
+
+        trainable = [p for p in prover.model.parameters() if p.requires_grad]
+        optimizer = torch.optim.Adam(trainable, lr=lr)
+
+        rewards_t = torch.tensor(rewards, dtype=torch.float32)
+        if len(rewards) > 1 and rewards_t.std() > 1e-8:
+            advantages_cpu = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+        else:
+            advantages_cpu = rewards_t
+
+        old_lp_cpu = torch.tensor(old_lp_cpu, dtype=torch.float32)
+        ref_lp_cpu = (
+            torch.tensor(ref_lp_cpu, dtype=torch.float32)
+            if ref_lp_cpu is not None
+            else None
+        )
+        use_kl = ref_lp_cpu is not None and kl_coeff > 0
+
+        local_batch_size = max(1, math.ceil(ppo_batch_size / max(1, world_size)))
+        global_batch_size = local_batch_size * world_size
+        loop_start_t = time.time()
+        running_loss = 0.0
+        n_updates = 0
+        last_step_done = start_update
+
+        if rank == 0:
+            print(
+                "  PPO distributed mode: "
+                f"world_size={world_size}, target_updates={target_updates}, "
+                f"global_batch_size={global_batch_size}, start_update={start_update}"
+            )
+
+        for step in range(start_update, target_updates):
+            now = time.time()
+            if global_stop_time > 0 and now >= global_stop_time:
+                if rank == 0:
+                    print("  PPO distributed stop: global job runtime budget reached.")
+                break
+            if (
+                ppo_max_wall_time_seconds > 0
+                and (now - loop_start_t) >= ppo_max_wall_time_seconds
+            ):
+                if rank == 0:
+                    print(
+                        "  PPO distributed stop by wall-time budget: "
+                        f"{int(now - loop_start_t)}s >= {ppo_max_wall_time_seconds}s"
+                    )
+                break
+
+            if rank == 0:
+                idx_tensor = torch.randint(
+                    low=0,
+                    high=len(prompts),
+                    size=(global_batch_size,),
+                    dtype=torch.long,
+                    device=device,
+                )
+            else:
+                idx_tensor = torch.empty(global_batch_size, dtype=torch.long, device=device)
+            dist.broadcast(idx_tensor, src=0)
+            start = rank * local_batch_size
+            end = start + local_batch_size
+            local_idx = idx_tensor[start:end].detach().cpu().tolist()
+
+            b_prompts = [prompts[i] for i in local_idx]
+            b_responses = [responses[i] for i in local_idx]
+            b_adv = advantages_cpu[local_idx].to(device)
+            b_old = old_lp_cpu[local_idx].to(device)
+            b_ref = ref_lp_cpu[local_idx].to(device) if use_kl else None
+
+            optimizer.zero_grad()
+            new_lp = compute_log_probs_batch(
+                prover.model,
+                prover.tokenizer,
+                b_prompts,
+                b_responses,
+                device,
+                max_length=ppo_max_length,
+                require_grad=True,
+                forward_batch_size=min(len(b_prompts), ppo_forward_batch_size),
+            )
+            if new_lp.numel() == 0:
+                continue
+            log_ratios = new_lp - b_old
+            ratios = torch.exp(log_ratios.clamp(-20, 20))
+            clipped = torch.clamp(ratios, 1 - clip_ratio, 1 + clip_ratio)
+            policy_loss = -torch.min(ratios * b_adv, clipped * b_adv).mean()
+            total = policy_loss
+            if use_kl and b_ref is not None:
+                kl_penalty = torch.mean((new_lp - b_ref) ** 2)
+                total = total + kl_coeff * kl_penalty
+
+            invalid_flag = torch.tensor(
+                1 if (torch.isnan(total) or torch.isinf(total)) else 0,
+                device=device,
+                dtype=torch.int32,
+            )
+            dist.all_reduce(invalid_flag, op=dist.ReduceOp.MAX)
+            if int(invalid_flag.item()) != 0:
+                optimizer.zero_grad()
+                continue
+
+            total.backward()
+            torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
+            optimizer.step()
+
+            loss_scalar = float(total.detach().item())
+            loss_stats = torch.tensor([loss_scalar, 1.0], device=device, dtype=torch.float32)
+            dist.reduce(loss_stats, dst=0, op=dist.ReduceOp.SUM)
+            last_step_done = step + 1
+            if rank == 0:
+                running_loss += float(loss_stats[0].item())
+                n_updates += int(loss_stats[1].item())
+                if (step + 1) % ppo_log_every == 0:
+                    avg = running_loss / max(1, n_updates)
+                    print(f"  PPO distributed update {step+1}/{target_updates}, avg loss: {avg:.4f}")
+                if checkpoint_path and (
+                    (step + 1) >= target_updates
+                    or ((step + 1) % ppo_resume_checkpoint_interval == 0)
+                ):
+                    save_prover_checkpoint(
+                        path=checkpoint_path,
+                        round_idx=round_idx,
+                        prover=prover,
+                        config_path=config_path,
+                        extra={"ppo_step_done": int(step + 1)},
+                    )
+
+            if (step + 1) % max(1, ppo_log_every) == 0:
+                cleanup_memory(device=device)
+
+        if rank == 0:
+            save_prover_checkpoint(
+                path=worker["result_path"],
+                round_idx=round_idx,
+                prover=prover,
+                config_path=config_path,
+                extra={"ppo_step_done": int(last_step_done)},
+            )
+            if n_updates > 0:
+                completed_steps = max(0, int(last_step_done) - int(start_update))
+                print(
+                    f"  PPO distributed complete: {completed_steps}/{target_updates} "
+                    f"updates, avg loss: {running_loss / max(1, n_updates):.4f}"
+                )
+        dist.barrier()
+    finally:
+        if prover is not None:
+            try:
+                prover.disable_data_parallel()
+            except Exception:
+                pass
+            prover.delete()
+        _dist_cleanup()
+
+
 def train_prover_ppo(
     prover: Prover,
     prompts: List[str],
@@ -819,6 +1052,9 @@ def train_prover_ppo(
     resume_update_idx: int = 0,
     on_progress_update: Optional[Callable[[int], None]] = None,
     should_stop_early: Optional[Callable[[], bool]] = None,
+    checkpoint_path: Optional[str] = None,
+    checkpoint_round_idx: Optional[int] = None,
+    checkpoint_config_path: Optional[str] = None,
 ):
     """PPO training for prover (Algorithm 2 / Equation 5)."""
     if not prompts:
@@ -835,6 +1071,10 @@ def train_prover_ppo(
     target_updates = int(train_cfg.get("ppo_target_updates_per_round", 0))
     ppo_log_every = max(1, int(train_cfg.get("ppo_log_every", 100)))
     ppo_parallel_reference_eval = bool(train_cfg.get("ppo_parallel_reference_eval", True))
+    prover_distributed_ppo = bool(train_cfg.get("prover_distributed_ppo", False))
+    prover_distributed_world_size = max(
+        1, int(train_cfg.get("prover_distributed_world_size", 2))
+    )
     ppo_early_stop_enable = bool(train_cfg.get("ppo_early_stop_enable", False))
     ppo_early_stop_patience_windows = max(
         1, int(train_cfg.get("ppo_early_stop_patience_windows", 4))
@@ -900,6 +1140,58 @@ def train_prover_ppo(
     else:
         old_lp = _compute_old_lp()
         ref_lp = _compute_ref_lp() if use_kl else None
+
+    if (
+        prover_distributed_ppo
+        and target_updates > 0
+        and torch.cuda.is_available()
+        and torch.cuda.device_count() >= 2
+    ):
+        if should_stop_early is not None and should_stop_early():
+            print("  Skipping distributed PPO due to global job runtime budget.")
+            return
+
+        world_size = min(prover_distributed_world_size, torch.cuda.device_count())
+        if world_size < 2:
+            print("  Distributed PPO requested but fewer than 2 GPUs are available; falling back.")
+        else:
+            print(f"  Launching distributed PPO across {world_size} GPUs.")
+            result_path = checkpoint_path or (
+                f"/tmp/pmv_dist_ppo_{os.getpid()}_{int(time.time())}.pt"
+            )
+            global_stop_time = 0.0
+            if should_stop_early is not None:
+                max_job_runtime_seconds = int(train_cfg.get("max_job_runtime_seconds", 0))
+                if max_job_runtime_seconds > 0:
+                    global_stop_time = time.time() + max_job_runtime_seconds
+
+            worker = {
+                "master_port": _find_free_port(),
+                "model_cfg": config["model"],
+                "train_cfg": dict(train_cfg),
+                "prompts": list(prompts),
+                "responses": list(responses),
+                "rewards": list(rewards),
+                "old_lp": old_lp.detach().cpu().tolist(),
+                "ref_lp": ref_lp.detach().cpu().tolist() if ref_lp is not None else None,
+                "initial_model_state": prover.state_dict_checkpoint()["model_state"],
+                "resume_update_idx": int(resume_update_idx),
+                "result_path": str(result_path),
+                "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
+                "config_path": checkpoint_config_path,
+                "round_idx": int(checkpoint_round_idx or 0),
+                "global_stop_time": float(global_stop_time),
+            }
+            mp.spawn(
+                _distributed_ppo_worker,
+                args=(world_size, worker),
+                nprocs=world_size,
+                join=True,
+            )
+            load_prover_checkpoint(str(result_path), prover=prover, strict=False)
+            if on_progress_update is not None and target_updates > 0:
+                on_progress_update(target_updates)
+            return
 
     def _ppo_update_batch(idx_list: List[int]) -> Optional[float]:
         bidx = torch.tensor(idx_list, dtype=torch.long, device=prover.device)

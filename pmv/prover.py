@@ -12,6 +12,7 @@ import json
 import re
 from typing import Optional
 import torch
+import torch.nn as nn
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -64,6 +65,38 @@ class Prover(Model):
         prompt = create_role_prompt(problem, role, self.tokenizer)
         return self.generate(prompt, max_new_tokens=2000)
 
+    def _wrapped_model(self):
+        return self.model.module if hasattr(self.model, "module") else self.model
+
+    def enable_data_parallel(self, device_ids=None):
+        """
+        Replicate the trainable prover across multiple GPUs for batched PPO/warmup
+        forward passes. Generation still uses the underlying module directly.
+        """
+        if not torch.cuda.is_available():
+            return False
+        if isinstance(self.model, nn.DataParallel):
+            return True
+        if device_ids is None:
+            device_ids = list(range(torch.cuda.device_count()))
+        device_ids = [int(d) for d in device_ids]
+        if len(device_ids) < 2:
+            return False
+        primary = device_ids[0]
+        self.model = nn.DataParallel(
+            self.model,
+            device_ids=device_ids,
+            output_device=primary,
+        )
+        self.device = f"cuda:{primary}"
+        print(f"Enabled prover DataParallel on devices: {device_ids}")
+        return True
+
+    def disable_data_parallel(self):
+        if isinstance(self.model, nn.DataParallel):
+            self.model = self.model.module
+            print("Disabled prover DataParallel.")
+
     def generate_with_role(self, problem: str, role: str, **kwargs) -> str:
         prompt = create_role_prompt(problem, role, self.tokenizer)
         return self.generate(prompt, **kwargs)
@@ -74,14 +107,14 @@ class Prover(Model):
 
     def state_dict_checkpoint(self):
         return {
-            "model_state": get_peft_model_state_dict(self.model),
+            "model_state": get_peft_model_state_dict(self._wrapped_model()),
         }
 
     def load_state_dict_checkpoint(self, state_dict, strict: bool = True):
         if "model_state" in state_dict:
-            set_peft_model_state_dict(self.model, state_dict["model_state"])
+            set_peft_model_state_dict(self._wrapped_model(), state_dict["model_state"])
         else:
-            set_peft_model_state_dict(self.model, state_dict)
+            set_peft_model_state_dict(self._wrapped_model(), state_dict)
 
 
 # ---------------------------------------------------------------------------

@@ -148,6 +148,20 @@ def main():
         default=None,
         help="Override collection early stopping in training config.",
     )
+    parser.add_argument(
+        "--prover-data-parallel",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Replicate prover across multiple GPUs for PPO/warmup forward passes.",
+    )
+    parser.add_argument(
+        "--prover-distributed-ppo",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Use multi-process DistributedDataParallel for fixed-update PPO.",
+    )
     parser.add_argument("--enable-two-gpu-accel", action="store_true")
     parser.add_argument("--max-rounds-this-run", type=int, default=None)
     parser.add_argument("--max-job-runtime-seconds", type=int, default=None)
@@ -230,6 +244,10 @@ def main():
             cfg["training"]["ppo_early_stop_enable"] = bool(args.ppo_early_stop_enable)
         if args.collect_early_stop_enable is not None:
             cfg["training"]["collect_early_stop_enable"] = bool(args.collect_early_stop_enable)
+        if args.prover_data_parallel is not None:
+            cfg["training"]["prover_data_parallel"] = bool(args.prover_data_parallel)
+        if args.prover_distributed_ppo is not None:
+            cfg["training"]["prover_distributed_ppo"] = bool(args.prover_distributed_ppo)
         if args.max_rounds_this_run is not None:
             cfg["training"]["max_rounds_this_run"] = int(args.max_rounds_this_run)
         if args.max_job_runtime_seconds is not None:
@@ -266,6 +284,8 @@ def main():
                     "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
                     "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
                     "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
+                    "prover_data_parallel": cfg.get("training", {}).get("prover_data_parallel"),
+                    "prover_distributed_ppo": cfg.get("training", {}).get("prover_distributed_ppo"),
                     "probe_episodes": None,
                     "attack_episodes": None,
                     "helpful_correctness": None,
@@ -348,6 +368,8 @@ def main():
                 "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
                 "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
                 "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
+                "prover_data_parallel": cfg.get("training", {}).get("prover_data_parallel"),
+                "prover_distributed_ppo": cfg.get("training", {}).get("prover_distributed_ppo"),
                 "probe_episodes": args.probe_episodes,
                 "attack_episodes": args.attack_episodes,
                 "helpful_correctness": rates.get("helpful_correctness"),
@@ -389,6 +411,8 @@ def main():
             "ppo_target_updates_per_round": args.ppo_target_updates_per_round,
             "ppo_early_stop_enable": args.ppo_early_stop_enable,
             "collect_early_stop_enable": args.collect_early_stop_enable,
+            "prover_data_parallel": args.prover_data_parallel,
+            "prover_distributed_ppo": args.prover_distributed_ppo,
             "enable_two_gpu_accel": args.enable_two_gpu_accel,
             "max_rounds_this_run": args.max_rounds_this_run,
             "max_job_runtime_seconds": args.max_job_runtime_seconds,

@@ -526,6 +526,9 @@ def main(config_path: str = "configs/config.yaml"):
             resume_update_idx=ppo_resume_update_idx,
             on_progress_update=_on_ppo_progress,
             should_stop_early=_job_runtime_exceeded,
+            checkpoint_path=str(inflight_state_alias) if save_checkpoints and target_updates > 0 else None,
+            checkpoint_round_idx=round_idx,
+            checkpoint_config_path=config_path,
         )
         replay_buffer.add_batch(new_records)
         print(f"Buffer size: {len(replay_buffer)}")

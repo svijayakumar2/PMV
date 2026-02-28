@@ -38,6 +38,7 @@ HELPFUL_WARMUP_STEPS=${HELPFUL_WARMUP_STEPS:-80}
 PPO_TARGET_UPDATES_PER_ROUND=${PPO_TARGET_UPDATES_PER_ROUND:-1800}
 PPO_EARLY_STOP_ENABLE=${PPO_EARLY_STOP_ENABLE:-1}
 COLLECT_EARLY_STOP_ENABLE=${COLLECT_EARLY_STOP_ENABLE:-1}
+PROVER_DISTRIBUTED_PPO=${PROVER_DISTRIBUTED_PPO:-0}
 MAX_JOB_RUNTIME_SECONDS=${MAX_JOB_RUNTIME_SECONDS:-13000}
 ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-1}
 SEED=${SEED:-0}
@@ -58,6 +59,7 @@ echo "Warmup steps: ${HELPFUL_WARMUP_STEPS}"
 echo "PPO target updates/round: ${PPO_TARGET_UPDATES_PER_ROUND}"
 echo "PPO early stop enable: ${PPO_EARLY_STOP_ENABLE}"
 echo "Collect early stop enable: ${COLLECT_EARLY_STOP_ENABLE}"
+echo "Prover distributed PPO: ${PROVER_DISTRIBUTED_PPO}"
 echo "Max job runtime seconds: ${MAX_JOB_RUNTIME_SECONDS}"
 echo "2GPU accel enabled: ${ENABLE_2GPU_ACCEL}"
 echo "Output dir: ${OUT_DIR}"
@@ -72,6 +74,7 @@ if [ "${PPO_TARGET_UPDATES_PER_ROUND}" -gt 0 ]; then
 fi
 EXTRA_ARGS+=("--ppo-early-stop-enable" "${PPO_EARLY_STOP_ENABLE}")
 EXTRA_ARGS+=("--collect-early-stop-enable" "${COLLECT_EARLY_STOP_ENABLE}")
+EXTRA_ARGS+=("--prover-distributed-ppo" "${PROVER_DISTRIBUTED_PPO}")
 if [ "${MAX_JOB_RUNTIME_SECONDS}" -gt 0 ]; then
   EXTRA_ARGS+=("--max-job-runtime-seconds" "${MAX_JOB_RUNTIME_SECONDS}")
 fi
