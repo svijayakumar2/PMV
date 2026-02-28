@@ -135,6 +135,12 @@ def main():
     parser.add_argument("--helpful-warmup-steps", type=int, default=None)
     parser.add_argument("--ppo-target-updates-per-round", type=int, default=None)
     parser.add_argument("--enable-two-gpu-accel", action="store_true")
+    parser.add_argument("--max-rounds-this-run", type=int, default=None)
+    parser.add_argument(
+        "--skip-eval",
+        action="store_true",
+        help="Train only; do not run evaluation or collapse classification.",
+    )
 
     # Eval settings.
     parser.add_argument("--probe-episodes", type=int, default=120)
@@ -205,6 +211,8 @@ def main():
             cfg["training"]["helpful_warmup_steps"] = int(args.helpful_warmup_steps)
         if args.ppo_target_updates_per_round is not None:
             cfg["training"]["ppo_target_updates_per_round"] = int(args.ppo_target_updates_per_round)
+        if args.max_rounds_this_run is not None:
+            cfg["training"]["max_rounds_this_run"] = int(args.max_rounds_this_run)
         if args.enable_two_gpu_accel:
             cfg["training"]["multi_gpu_verifier_parallel"] = True
             cfg["training"]["parallel_verifier_inference"] = True
@@ -220,6 +228,37 @@ def main():
         print("=" * 88)
 
         _run_cmd(["python3", "-u", "-m", "pmv.main", str(cfg_path)])
+
+        if args.skip_eval:
+            summary_rows.append(
+                {
+                    "variant_id": vid,
+                    "num_verifiers": nv,
+                    "oversight_rule": rule,
+                    "prover_model": args.prover_model,
+                    "verifier_model": resolved_vmodel,
+                    "train_rounds": cfg.get("training", {}).get("rounds"),
+                    "bootstrap_episodes": cfg.get("training", {}).get("bootstrap_episodes"),
+                    "bootstrap_oracle_episodes": cfg.get("training", {}).get("bootstrap_oracle_episodes"),
+                    "collect_episodes": cfg.get("training", {}).get("collect_episodes"),
+                    "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
+                    "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
+                    "probe_episodes": None,
+                    "attack_episodes": None,
+                    "helpful_correctness": None,
+                    "sneaky_incorrect_rate": None,
+                    "sneaky_fool_rate": None,
+                    "binary_accuracy": None,
+                    "separation": None,
+                    "n_correct": None,
+                    "n_incorrect": None,
+                    "goal_auroc": None,
+                    "goal_center_sneaky_conditional_fool_rate": None,
+                    "goal_center_helpful_correct_accept_rate": None,
+                    "goal_sensitivity_pm0p02": None,
+                }
+            )
+            continue
 
         ckpt = Path(cfg["training"]["checkpoint_root"]) / f"{cfg_path.stem}_latest.pt"
         if not ckpt.exists():
@@ -305,7 +344,7 @@ def main():
             }
         )
 
-    if eval_files:
+    if eval_files and not args.skip_eval:
         _run_cmd(["python3", "-u", "pmv/scripts/classify_collapse.py", *eval_files])
 
     summary_payload = {
@@ -324,6 +363,8 @@ def main():
             "helpful_warmup_steps": args.helpful_warmup_steps,
             "ppo_target_updates_per_round": args.ppo_target_updates_per_round,
             "enable_two_gpu_accel": args.enable_two_gpu_accel,
+            "max_rounds_this_run": args.max_rounds_this_run,
+            "skip_eval": args.skip_eval,
             "probe_episodes": args.probe_episodes,
             "attack_episodes": args.attack_episodes,
             "probe_max_new_tokens": args.probe_max_new_tokens,

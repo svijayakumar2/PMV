@@ -308,6 +308,8 @@ def main(config_path: str = "configs/config.yaml"):
 
     # ---- Main training loop (Algorithm 1) --------------------------------
     num_rounds = int(train_cfg.get("rounds", 10))
+    max_rounds_this_run = max(0, int(train_cfg.get("max_rounds_this_run", 0)))
+    rounds_completed_this_run = 0
     print(f"\n{'='*80}")
     print(f"MAIN TRAINING: {num_rounds} rounds")
     print(f"{'='*80}")
@@ -538,6 +540,13 @@ def main(config_path: str = "configs/config.yaml"):
             del base_prover
         del prover
         cleanup_memory()
+        rounds_completed_this_run += 1
+        if max_rounds_this_run > 0 and rounds_completed_this_run >= max_rounds_this_run:
+            print(
+                f"Stopping after {rounds_completed_this_run} round(s) this invocation "
+                f"(max_rounds_this_run={max_rounds_this_run})."
+            )
+            break
 
     # Final cleanup
     ensemble.delete_verifiers()
