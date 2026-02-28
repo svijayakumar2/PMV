@@ -821,6 +821,16 @@ def _find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _to_cpu_state_dict(state: Dict) -> Dict:
+    out = {}
+    for k, v in state.items():
+        if torch.is_tensor(v):
+            out[k] = v.detach().cpu()
+        else:
+            out[k] = v
+    return out
+
+
 def _dist_setup(rank: int, world_size: int, master_port: int):
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(master_port)
@@ -1159,6 +1169,9 @@ def train_prover_ppo(
             result_path = checkpoint_path or (
                 f"/tmp/pmv_dist_ppo_{os.getpid()}_{int(time.time())}.pt"
             )
+            initial_model_state = _to_cpu_state_dict(
+                prover.state_dict_checkpoint()["model_state"]
+            )
             global_stop_time = 0.0
             if should_stop_early is not None:
                 max_job_runtime_seconds = int(train_cfg.get("max_job_runtime_seconds", 0))
@@ -1174,7 +1187,7 @@ def train_prover_ppo(
                 "rewards": list(rewards),
                 "old_lp": old_lp.detach().cpu().tolist(),
                 "ref_lp": ref_lp.detach().cpu().tolist() if ref_lp is not None else None,
-                "initial_model_state": prover.state_dict_checkpoint()["model_state"],
+                "initial_model_state": initial_model_state,
                 "resume_update_idx": int(resume_update_idx),
                 "result_path": str(result_path),
                 "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
