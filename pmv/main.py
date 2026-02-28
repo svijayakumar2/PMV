@@ -12,6 +12,7 @@ import sys
 import os
 import json
 import random
+import time
 import torch
 import yaml
 from pathlib import Path
@@ -87,6 +88,7 @@ def _build_oracle_response(dataset, solution_true: str, dataset_type: str = "mat
 
 def main(config_path: str = "configs/config.yaml"):
     cleanup_memory()
+    run_start_time = time.time()
 
     print("=" * 80)
     print("PMV GAME - Prover Multi-Verifier")
@@ -231,6 +233,12 @@ def main(config_path: str = "configs/config.yaml"):
         train_cfg.get("round_helpful_warmup_steps", train_cfg.get("helpful_warmup_steps", 0))
     )
     mu_0 = float(train_cfg.get("mu_0", 0.5))
+    max_job_runtime_seconds = max(0, int(train_cfg.get("max_job_runtime_seconds", 0)))
+
+    def _job_runtime_exceeded() -> bool:
+        if max_job_runtime_seconds <= 0:
+            return False
+        return (time.time() - run_start_time) >= max_job_runtime_seconds
 
     if resumed:
         print(
@@ -305,6 +313,14 @@ def main(config_path: str = "configs/config.yaml"):
         del prover
         cleanup_memory()
         print(f"\nBootstrap complete. Buffer size: {len(replay_buffer)}")
+        if _job_runtime_exceeded():
+            print(
+                "Stopping after bootstrap due to max_job_runtime_seconds="
+                f"{max_job_runtime_seconds}."
+            )
+            ensemble.delete_verifiers()
+            cleanup_memory()
+            return
 
     # ---- Main training loop (Algorithm 1) --------------------------------
     num_rounds = int(train_cfg.get("rounds", 10))
@@ -325,6 +341,12 @@ def main(config_path: str = "configs/config.yaml"):
         return
 
     for round_idx in range(start_round, num_rounds + 1):
+        if _job_runtime_exceeded():
+            print(
+                "Stopping before next round due to max_job_runtime_seconds="
+                f"{max_job_runtime_seconds}."
+            )
+            break
         print(f"\n{'='*80}")
         print(f"ROUND {round_idx}/{num_rounds}")
         print(f"{'='*80}")
@@ -406,6 +428,22 @@ def main(config_path: str = "configs/config.yaml"):
                 config=config,
                 steps_override=round_warmup_steps,
             )
+            if _job_runtime_exceeded():
+                print(
+                    "Stopping before collection due to max_job_runtime_seconds="
+                    f"{max_job_runtime_seconds}."
+                )
+                if save_checkpoints and (round_idx % max(1, checkpoint_every) == 0):
+                    ckpt_path = run_ckpt_dir / f"round_{round_idx-1:03d}.pt"
+                    if latest_alias.exists():
+                        print(f"Latest completed checkpoint remains: {latest_alias}")
+                prover.delete()
+                if base_prover is not None:
+                    base_prover.delete()
+                    del base_prover
+                del prover
+                cleanup_memory()
+                break
 
             prompts, responses, rewards, new_records = collect_prover_experiences(
                 prover, ensemble, dataset, config, round_idx,
@@ -487,6 +525,7 @@ def main(config_path: str = "configs/config.yaml"):
             base_prover=base_prover,
             resume_update_idx=ppo_resume_update_idx,
             on_progress_update=_on_ppo_progress,
+            should_stop_early=_job_runtime_exceeded,
         )
         replay_buffer.add_batch(new_records)
         print(f"Buffer size: {len(replay_buffer)}")

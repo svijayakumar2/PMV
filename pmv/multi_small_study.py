@@ -134,8 +134,23 @@ def main():
     parser.add_argument("--collect-episodes", type=int, default=None)
     parser.add_argument("--helpful-warmup-steps", type=int, default=None)
     parser.add_argument("--ppo-target-updates-per-round", type=int, default=None)
+    parser.add_argument(
+        "--ppo-early-stop-enable",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Override PPO plateau early stopping in training config.",
+    )
+    parser.add_argument(
+        "--collect-early-stop-enable",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Override collection early stopping in training config.",
+    )
     parser.add_argument("--enable-two-gpu-accel", action="store_true")
     parser.add_argument("--max-rounds-this-run", type=int, default=None)
+    parser.add_argument("--max-job-runtime-seconds", type=int, default=None)
     parser.add_argument(
         "--skip-eval",
         action="store_true",
@@ -211,8 +226,14 @@ def main():
             cfg["training"]["helpful_warmup_steps"] = int(args.helpful_warmup_steps)
         if args.ppo_target_updates_per_round is not None:
             cfg["training"]["ppo_target_updates_per_round"] = int(args.ppo_target_updates_per_round)
+        if args.ppo_early_stop_enable is not None:
+            cfg["training"]["ppo_early_stop_enable"] = bool(args.ppo_early_stop_enable)
+        if args.collect_early_stop_enable is not None:
+            cfg["training"]["collect_early_stop_enable"] = bool(args.collect_early_stop_enable)
         if args.max_rounds_this_run is not None:
             cfg["training"]["max_rounds_this_run"] = int(args.max_rounds_this_run)
+        if args.max_job_runtime_seconds is not None:
+            cfg["training"]["max_job_runtime_seconds"] = int(args.max_job_runtime_seconds)
         if args.enable_two_gpu_accel:
             cfg["training"]["multi_gpu_verifier_parallel"] = True
             cfg["training"]["parallel_verifier_inference"] = True
@@ -243,6 +264,8 @@ def main():
                     "collect_episodes": cfg.get("training", {}).get("collect_episodes"),
                     "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
                     "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
+                    "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
+                    "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
                     "probe_episodes": None,
                     "attack_episodes": None,
                     "helpful_correctness": None,
@@ -323,6 +346,8 @@ def main():
                 "collect_episodes": cfg.get("training", {}).get("collect_episodes"),
                 "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
                 "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
+                "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
+                "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
                 "probe_episodes": args.probe_episodes,
                 "attack_episodes": args.attack_episodes,
                 "helpful_correctness": rates.get("helpful_correctness"),
@@ -362,8 +387,11 @@ def main():
             "collect_episodes": args.collect_episodes,
             "helpful_warmup_steps": args.helpful_warmup_steps,
             "ppo_target_updates_per_round": args.ppo_target_updates_per_round,
+            "ppo_early_stop_enable": args.ppo_early_stop_enable,
+            "collect_early_stop_enable": args.collect_early_stop_enable,
             "enable_two_gpu_accel": args.enable_two_gpu_accel,
             "max_rounds_this_run": args.max_rounds_this_run,
+            "max_job_runtime_seconds": args.max_job_runtime_seconds,
             "skip_eval": args.skip_eval,
             "probe_episodes": args.probe_episodes,
             "attack_episodes": args.attack_episodes,

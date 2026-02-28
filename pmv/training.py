@@ -818,6 +818,7 @@ def train_prover_ppo(
     base_prover: Prover = None,
     resume_update_idx: int = 0,
     on_progress_update: Optional[Callable[[int], None]] = None,
+    should_stop_early: Optional[Callable[[], bool]] = None,
 ):
     """PPO training for prover (Algorithm 2 / Equation 5)."""
     if not prompts:
@@ -957,6 +958,9 @@ def train_prover_ppo(
             f"batch_size={batch_size}, start_update={start_update}"
         )
         for step in range(start_update, target_updates):
+            if should_stop_early is not None and should_stop_early():
+                print("  PPO stopping early due to global job runtime budget.")
+                break
             if (
                 ppo_max_wall_time_seconds > 0
                 and (time.time() - loop_start_t) >= ppo_max_wall_time_seconds
