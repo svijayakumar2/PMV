@@ -1,0 +1,335 @@
+Job started at: Sat Feb 28 12:03:28 PM EST 2026
+Host: cccxc572
+Job ID: 483524
+Variants: multi_small_3b_specialized:3:supervised:small
+Rounds total: 10
+Rounds this run: 0
+Bootstrap: 100
+Oracle bootstrap: 100
+Collect episodes: 120
+Warmup steps: 80
+PPO target updates/round: 8000
+PPO early stop enable: 0
+Collect early stop enable: 0
+Prover distributed PPO: 1
+Max job runtime seconds: 13000
+2GPU accel enabled: 1
+Output dir: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp
+
+
+========================================================================================
+VARIANT multi_small_3b_specialized: n=3, rule=supervised, prover=Qwen/Qwen2.5-3B-Instruct, verifier=Qwen/Qwen2.5-3B-Instruct
+========================================================================================
+RUN: python3 -u -m pmv.main results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/config_multi_small_3b_specialized.yaml
+================================================================================
+PMV GAME - Prover Multi-Verifier
+================================================================================
+Seed: 0
+Oversight rule: supervised
+Device plan: prover=cuda:0, reference=cuda:1
+Checkpoint dir: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_483524
+  Verifier devices: ['cuda:0', 'cuda:1', 'cuda:0']
+  Parallel verifier inference is enabled.
+
+Creating verifiers (persist across rounds)...
+  Creating verifier 0 (logical_structure)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 0 (logical_structure)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+  Creating verifier 1 (computational_accuracy)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 1 (computational_accuracy)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+  Creating verifier 2 (problem_alignment)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 2 (problem_alignment)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+Found inflight checkpoint pair:
+  context=results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_inflight_context.pt
+  state=results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_inflight_state.pt
+Resuming inflight round 1 from PPO step 0.
+
+Skipping bootstrap due to resume. Restored buffer size: 175
+
+================================================================================
+MAIN TRAINING: 10 rounds
+================================================================================
+
+================================================================================
+ROUND 1/10
+================================================================================
+Resuming inflight ROUND 1: starting PPO from update 0.
+
+Restoring prover from inflight checkpoint...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Creating PPO reference prover...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+
+Training prover via PPO...
+  Launching distributed PPO across 2 GPUs.
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+  PPO distributed mode: world_size=2, target_updates=8000, global_batch_size=8, start_update=0
+  PPO distributed update 200/8000, avg loss: -0.0880
+  PPO distributed update 400/8000, avg loss: -0.1061
+  PPO distributed update 600/8000, avg loss: -0.0927
+  PPO distributed update 800/8000, avg loss: -0.0897
+  PPO distributed update 1000/8000, avg loss: -0.0823
+  PPO distributed update 1200/8000, avg loss: -0.0890
+  PPO distributed update 1400/8000, avg loss: -0.0925
+  PPO distributed update 1600/8000, avg loss: -0.0918
+  PPO distributed update 1800/8000, avg loss: -0.0911
+  PPO distributed update 2000/8000, avg loss: -0.0922
+  PPO distributed update 2200/8000, avg loss: -0.0930
+  PPO distributed update 2400/8000, avg loss: -0.0902
+  PPO distributed update 2600/8000, avg loss: -0.0911
+  PPO distributed update 2800/8000, avg loss: -0.0941
+  PPO distributed update 3000/8000, avg loss: -0.0940
+  PPO distributed update 3200/8000, avg loss: -0.0931
+  PPO distributed update 3400/8000, avg loss: -0.0918
+  PPO distributed update 3600/8000, avg loss: -0.0918
+  PPO distributed update 3800/8000, avg loss: -0.0914
+  PPO distributed update 4000/8000, avg loss: -0.0924
+  PPO distributed update 4200/8000, avg loss: -0.0910
+  PPO distributed update 4400/8000, avg loss: -0.0899
+  PPO distributed update 4600/8000, avg loss: -0.0893
+  PPO distributed update 4800/8000, avg loss: -0.0884
+  PPO distributed update 5000/8000, avg loss: -0.0877
+  PPO distributed update 5200/8000, avg loss: -0.0870
+  PPO distributed update 5400/8000, avg loss: -0.0863
+  PPO distributed update 5600/8000, avg loss: -0.0858
+  PPO distributed update 5800/8000, avg loss: -0.0861
+  PPO distributed update 6000/8000, avg loss: -0.0868
+  PPO distributed update 6200/8000, avg loss: -0.0870
+  PPO distributed update 6400/8000, avg loss: -0.0861
+  PPO distributed update 6600/8000, avg loss: -0.0866
+  PPO distributed update 6800/8000, avg loss: -0.0873
+  PPO distributed update 7000/8000, avg loss: -0.0876
+  PPO distributed update 7200/8000, avg loss: -0.0866
+  PPO distributed update 7400/8000, avg loss: -0.0863
+  PPO distributed update 7600/8000, avg loss: -0.0869
+  PPO distributed update 7800/8000, avg loss: -0.0885
+  PPO distributed update 8000/8000, avg loss: -0.0885
+  PPO distributed complete: 8000/8000 updates, avg loss: -0.0885
+Buffer size: 295
+Saved checkpoint: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_483524/round_001.pt
+Updated latest checkpoint: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_latest.pt
+
+================================================================================
+ROUND 2/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 295 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=125, negatives=170)
+  Separation loss enabled: lambda=0.5, margin=0.08, min_per_class=1
+  Epoch 1/3, oversight loss: 0.7245
+  Epoch 2/3, oversight loss: 0.7084
+  Epoch 3/3, oversight loss: 0.7007
+Phase 1 complete. Oversight loss: 0.7007
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Creating PPO reference prover...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+
+Collecting 120 episodes...
+Downloading OpenMathInstruct-2 dataset...
+Filtering for MATH problems...
+Using 14704 samples
+Train: 13234, Test: 1470
+  Episode 10/120, role=sneaky, correct=False, f=0.512, r=2.512
+  Episode 20/120, role=sneaky, correct=False, f=0.499, r=2.499
+  Episode 30/120, role=sneaky, correct=False, f=0.500, r=2.500
+  Episode 40/120, role=sneaky, correct=False, f=0.490, r=2.490
+  Episode 50/120, role=sneaky, correct=False, f=0.485, r=2.485
+  Episode 60/120, role=sneaky, correct=True, f=0.561, r=-2.561
+  Episode 70/120, role=sneaky, correct=True, f=0.551, r=-2.551
+  Episode 80/120, role=sneaky, correct=False, f=0.511, r=2.511
+  Episode 90/120, role=sneaky, correct=False, f=0.512, r=2.512
+  Episode 100/120, role=sneaky, correct=True, f=0.509, r=-2.509
+  Episode 110/120, role=sneaky, correct=False, f=0.483, r=2.483
+  Episode 120/120, role=sneaky, correct=True, f=0.503, r=-2.503
+Collection diagnostics: FINAL format 120/120 (100.00%), sneaky incorrect 43/60, sneaky fooled@0.50 14/60, mean f (helpful/sneaky)=(0.504/0.504)
+Mean reward: 0.4157
+Helpful correctness: 27/60
+Sneaky fool rate@0.50: 14/60
+
+Training prover via PPO...
+  Launching distributed PPO across 2 GPUs.
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+  PPO distributed mode: world_size=2, target_updates=8000, global_batch_size=8, start_update=0
+  PPO distributed update 200/8000, avg loss: -0.0880
+  PPO distributed update 400/8000, avg loss: -0.0796
+  PPO distributed update 600/8000, avg loss: -0.0764
+  PPO distributed update 800/8000, avg loss: -0.0944
+  PPO distributed update 1000/8000, avg loss: -0.0968
+  PPO distributed update 1200/8000, avg loss: -0.0980
+  PPO distributed update 1400/8000, avg loss: -0.0987
+  PPO distributed update 1600/8000, avg loss: -0.0957
+  PPO distributed update 1800/8000, avg loss: -0.0900
+  PPO distributed update 2000/8000, avg loss: -0.0875
+  PPO distributed update 2200/8000, avg loss: -0.0885
+  PPO distributed update 2400/8000, avg loss: -0.0897
+  PPO distributed update 2600/8000, avg loss: -0.0909
+  PPO distributed update 2800/8000, avg loss: -0.0911
+  PPO distributed update 3000/8000, avg loss: -0.0893
+  PPO distributed update 3200/8000, avg loss: -0.0878
+  PPO distributed update 3400/8000, avg loss: -0.0882
+  PPO distributed update 3600/8000, avg loss: -0.0871
+  PPO distributed update 3800/8000, avg loss: -0.0863
+  PPO distributed update 4000/8000, avg loss: -0.0845
+  PPO distributed update 4200/8000, avg loss: -0.0833
+  PPO distributed update 4400/8000, avg loss: -0.0839
+  PPO distributed update 4600/8000, avg loss: -0.0822
+  PPO distributed update 4800/8000, avg loss: -0.0813
+  PPO distributed update 5000/8000, avg loss: -0.0833
+  PPO distributed update 5200/8000, avg loss: -0.0827
+  PPO distributed update 5400/8000, avg loss: -0.0802
+  PPO distributed update 5600/8000, avg loss: -0.0812
+  PPO distributed update 5800/8000, avg loss: -0.0812
+  PPO distributed update 6000/8000, avg loss: -0.0820
+  PPO distributed update 6200/8000, avg loss: -0.0812
+  PPO distributed update 6400/8000, avg loss: -0.0797
+  PPO distributed update 6600/8000, avg loss: -0.0797
+  PPO distributed update 6800/8000, avg loss: -0.0789
+  PPO distributed update 7000/8000, avg loss: -0.0797
+  PPO distributed update 7200/8000, avg loss: -0.0796
+  PPO distributed update 7400/8000, avg loss: -0.0788
+  PPO distributed update 7600/8000, avg loss: -0.0793
+  PPO distributed update 7800/8000, avg loss: -0.0797
+  PPO distributed update 8000/8000, avg loss: -0.0797
+  PPO distributed complete: 8000/8000 updates, avg loss: -0.0797
+Buffer size: 415
+Saved checkpoint: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_483524/round_002.pt
+Updated latest checkpoint: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_latest.pt
+
+================================================================================
+ROUND 3/10
+================================================================================
+
+────────────────────────────────────────────────────────────
+PHASE 1: NASH UPDATE (oversight_rule=supervised)
+Training on 415 buffered solutions
+────────────────────────────────────────────────────────────
+  Stratified batches enabled (positives=169, negatives=246)
+  Separation loss enabled: lambda=0.5, margin=0.08, min_per_class=1
+  Epoch 1/3, oversight loss: 0.6531
+  Epoch 2/3, oversight loss: 0.6345
+  Epoch 3/3, oversight loss: 0.6221
+Phase 1 complete. Oversight loss: 0.6221
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Creating PPO reference prover...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Stopping before collection due to max_job_runtime_seconds=13000.
+Latest completed checkpoint remains: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/checkpoints/config_multi_small_3b_specialized_latest.pt
+
+================================================================================
+Training complete!
+================================================================================
+
+Saved summary JSON: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/multi_small_study.json
+Saved summary CSV: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/multi_small_study.csv
+Output dir: results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp
+
+Round-train resumable DDP job complete.
+Job finished at: Sat Feb 28 03:50:37 PM EST 2026
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc572>
+Subject: Job 483524: <pmv_multismall_math_roundtrain_2gpu_ddp> in cluster <CCC2_LSF> Done
+
+Job <pmv_multismall_math_roundtrain_2gpu_ddp> was submitted from host <ccc-login3> by user <saranyaibm2> in cluster <CCC2_LSF> at Sat Feb 28 12:03:25 2026
+Job was executed on host(s) <cccxc572>, in queue <normal>, as user <saranyaibm2> in cluster <CCC2_LSF> at Sat Feb 28 12:03:26 2026
+</u/saranyaibm2> was used as the home directory.
+</dccstor/principled_ai/users/saranyaibm2/PMV> was used as the working directory.
+Started at Sat Feb 28 12:03:26 2026
+Terminated at Sat Feb 28 15:50:43 2026
+Results reported at Sat Feb 28 15:50:43 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -J pmv_multismall_math_roundtrain_2gpu_ddp
+#BSUB -q normal
+#BSUB -gpu "num=2:mode=shared:gmodel=NVIDIAA100_SXM4_80GB"
+#BSUB -M 128GB
+#BSUB -R "rusage[mem=128GB]"
+#BSUB -o /u/saranyaibm2/.lsbatch/%J.out
+#BSUB -e /u/saranyaibm2/.lsbatch/%J.err
+#BSUB -W 48:00
+
+set -euo pipefail
+
+export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
+export TRANSFORMERS_CACHE="$HF_HOME"
+export HF_DATASETS_CACHE="$HF_HOME"
+export PYTHONFAULTHANDLER=1
+
+REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
+BASE_CONFIG=${BASE_CONFIG:-pmv/configs/experiments/config_multismall_study_math_tuned.yaml}
+PROVER_MODEL=${PROVER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+SMALL_VERIFIER_MODEL=${SMALL_VERIFIER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+LARGE_VERIFIER_MODEL=${LARGE_VERIFIER_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+VARIANTS=${VARIANTS:-multi_small_3b_specialized:3:supervised:small}
+
+TRAIN_ROUNDS=${TRAIN_ROUNDS:-10}
+MAX_ROUNDS_THIS_RUN=${MAX_ROUNDS_THIS_RUN:-0}
+BOOTSTRAP_EPISODES=${BOOTSTRAP_EPISODES:-100}
+BOOTSTRAP_ORACLE_EPISODES=${BOOTSTRAP_ORACLE_EPISODES:-100}
+COLLECT_EPISODES=${COLLECT_EPISODES:-120}
+HELPFUL_WARMUP_STEPS=${HELPFUL_WARMUP_STEPS:-80}
+PPO_TARGET_UPDATES_PER_ROUND=${PPO_TARGET_UPDATES_PER_ROUND:-8000}
+PPO_EARLY_STOP_ENABLE=${PPO_EARLY_STOP_ENABLE:-0}
+COLLECT_EARLY_STOP_ENABLE=${COLLECT_EARLY_STOP_ENABLE:-0}
+PROVER_DISTRIBUTED_PPO=${PROVER_DISTRIBUTED_PPO:-1}
+MAX_JOB_RUNTIME_SECONDS=${MAX_JOB_RUNTIME_SECONDS:-13000}
+ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-1}
+SEED=${SEED:-0}
+
+RUN_NAME=${RUN_NAME:-math_roundtrain_2gpu_ddp}
+OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_NAME}}
+
+echo "Job started at: $(date)"
+echo "Host: $(hostname)"
+echo "Job ID: ${LSB_JOBID:-local}"
+echo "Variants: ${VARIANTS}"
+echo "Rounds total: ${TRAIN_ROUNDS}"
+echo "Rounds this run: ${MAX_ROUNDS_THIS_RUN}"
+echo "Bootstrap: ${BOOTSTRAP_EPISODES}"
+echo "Oracle bootstrap: ${BOOTSTRAP_ORACLE_EPISODES}"
+echo "Collect episodes: ${COLLECT_EPISODES}"
+
+(... more ...)
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time :                                   20529.00 sec.
+    Max Memory :                                 8 GB
+    Average Memory :                             4.86 GB
+    Total Requested Memory :                     128.00 GB
+    Delta Memory :                               120.00 GB
+    Max Swap :                                   -
+    Max Processes :                              39
+    Max Threads :                                339
+    Run time :                                   13630 sec.
+    Turnaround time :                            13638 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file </u/saranyaibm2/.lsbatch/483524.err> for stderr output of this job.
+
