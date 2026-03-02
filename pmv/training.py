@@ -742,6 +742,14 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
         ppo_resume_checkpoint_interval = max(
             1, int(train_cfg.get("ppo_resume_checkpoint_interval", 200))
         )
+        ppo_early_stop_enable = bool(train_cfg.get("ppo_early_stop_enable", False))
+        ppo_early_stop_patience_windows = max(
+            1, int(train_cfg.get("ppo_early_stop_patience_windows", 4))
+        )
+        ppo_early_stop_min_delta = float(train_cfg.get("ppo_early_stop_min_delta", 5e-4))
+        ppo_early_stop_warmup_updates = max(
+            0, int(train_cfg.get("ppo_early_stop_warmup_updates", 1000))
+        )
         start_update = max(0, int(worker.get("resume_update_idx", 0)))
         ppo_max_wall_time_seconds = max(0, int(train_cfg.get("ppo_max_wall_time_seconds", 0)))
         global_stop_time = float(worker.get("global_stop_time", 0.0) or 0.0)
@@ -769,6 +777,8 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
         running_loss = 0.0
         n_updates = 0
         last_step_done = start_update
+        best_window_avg = None
+        stale_windows = 0
 
         if rank == 0:
             print(
@@ -864,12 +874,31 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
             loss_stats = torch.tensor([loss_scalar, 1.0], device=device, dtype=torch.float32)
             dist.reduce(loss_stats, dst=0, op=dist.ReduceOp.SUM)
             last_step_done = step + 1
+
+            # Early-stop flag: rank 0 evaluates plateau, broadcasts decision to all ranks.
+            early_stop_flag = torch.tensor(0, device=device, dtype=torch.int32)
             if rank == 0:
                 running_loss += float(loss_stats[0].item())
                 n_updates += int(loss_stats[1].item())
                 if (step + 1) % ppo_log_every == 0:
                     avg = running_loss / max(1, n_updates)
                     print(f"  PPO distributed update {step+1}/{target_updates}, avg loss: {avg:.4f}")
+                    if (
+                        ppo_early_stop_enable
+                        and (step + 1) >= ppo_early_stop_warmup_updates
+                    ):
+                        if best_window_avg is None or avg < (best_window_avg - ppo_early_stop_min_delta):
+                            best_window_avg = avg
+                            stale_windows = 0
+                        else:
+                            stale_windows += 1
+                            if stale_windows >= ppo_early_stop_patience_windows:
+                                print(
+                                    f"  PPO distributed early stop: "
+                                    f"avg_loss={avg:.4f}, best={best_window_avg:.4f}, "
+                                    f"stale_windows={stale_windows}"
+                                )
+                                early_stop_flag.fill_(1)
                 if checkpoint_path and (
                     (step + 1) >= target_updates
                     or ((step + 1) % ppo_resume_checkpoint_interval == 0)
@@ -882,8 +911,11 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
                         extra={"ppo_step_done": int(step + 1)},
                     )
 
+            dist.broadcast(early_stop_flag, src=0)
             if (step + 1) % max(1, ppo_log_every) == 0:
                 cleanup_memory(device=device)
+            if int(early_stop_flag.item()) != 0:
+                break
 
         if rank == 0:
             save_prover_checkpoint(
