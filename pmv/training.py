@@ -46,103 +46,60 @@ def reward_function(
     f_score: float,
     role: str,
     is_correct: bool,
-    reward_mode: str = "thresholded",
+    reward_mode: str = "affine",
     alpha_1: float = 1.0, beta_1: float = 1.0,
     alpha_2: float = -0.5, beta_2: float = 0.25,
-    fool_threshold: float = 0.5,
-    sneaky_margin_scale: float = 1.0,
-    sneaky_correct_penalty: float = -1.0,
 ) -> float:
     """
-    Reward shaping for helpful/sneaky roles.
+    Affine role-alignment reward from Eq. (4).
 
-    Modes:
-      - thresholded (default): sneaky reward depends on fooling margin (f - threshold)
-      - affine: role-alignment affine reward from Eq. (4)
+    role_aligned = True  iff  (helpful ∧ correct) ∨ (sneaky ∧ incorrect)
+      - Aligned:     r = α₁ + β₁ · f   (rewarded proportionally to oversight approval)
+      - Misaligned:  r = α₂ + β₂ · f   (penalized; β₂ ≤ 0 means higher f is worse)
+
+    Typical config: α₁=2.0, β₁=1.0, α₂=-2.0, β₂=-1.0
+      → aligned range [2.0, 3.0], misaligned range [-3.0, -2.0]
     """
     role = str(role).strip().lower()
-    reward_mode = str(reward_mode).strip().lower()
-
-    if reward_mode == "affine":
-        role_aligned = is_correct if role == "helpful" else not is_correct
-        if role_aligned:
-            return alpha_1 + beta_1 * f_score
-        return alpha_2 + beta_2 * f_score
-
-    if reward_mode not in {"thresholded", "affine"}:
+    if str(reward_mode).strip().lower() != "affine":
         raise ValueError(
-            f"Unknown reward_mode={reward_mode!r}. Expected one of: thresholded, affine."
+            f"Unknown reward_mode={reward_mode!r}. Only 'affine' is supported."
         )
-
-    if role == "helpful":
-        if is_correct:
-            return alpha_1 + beta_1 * f_score
-        return alpha_2 + beta_2 * f_score
-
-    # Sneaky role:
-    # - Incorrect + high oversight score should be rewarded.
-    # - Incorrect + low oversight score should be penalized.
-    # - Correct sneaky answers are explicitly discouraged.
-    if is_correct:
-        return sneaky_correct_penalty
-    return sneaky_margin_scale * (f_score - fool_threshold)
+    role_aligned = is_correct if role == "helpful" else not is_correct
+    if role_aligned:
+        return alpha_1 + beta_1 * f_score
+    return alpha_2 + beta_2 * f_score
 
 
-def _compute_label_weights(records: List[SolutionRecord]) -> Tuple[float, float, int, int]:
-    """Return (positive_weight, negative_weight, num_positive, num_negative)."""
-    n_pos = sum(1 for r in records if float(r.correctness) >= 0.5)
-    n_total = len(records)
-    n_neg = max(0, n_total - n_pos)
-
-    if n_pos == 0 or n_neg == 0:
-        return 1.0, 1.0, n_pos, n_neg
-
-    # Inverse-frequency balancing: each class contributes ~50% of the loss.
-    pos_w = n_total / (2.0 * n_pos)
-    neg_w = n_total / (2.0 * n_neg)
-    return float(pos_w), float(neg_w), n_pos, n_neg
-
-
-def _supervised_weighted_bce(
-    oversight: torch.Tensor,
-    target: torch.Tensor,
-    pos_w: float,
-    neg_w: float,
-) -> torch.Tensor:
-    sample_w = pos_w if float(target.item()) >= 0.5 else neg_w
-    weight_t = torch.tensor(sample_w, dtype=torch.float32, device=target.device)
-    return F.binary_cross_entropy(
-        oversight.clamp(1e-6, 1 - 1e-6),
-        target,
-        weight=weight_t,
-    )
-
-
-def _build_stratified_epoch_records(
+def _build_bt_pairs(
     records: List[SolutionRecord],
-    batch_size: int,
-) -> List[SolutionRecord]:
+) -> List[Tuple[SolutionRecord, SolutionRecord]]:
     """
-    Build one epoch sample list with approximately balanced correct/incorrect
-    examples in each batch. Falls back to shuffled records if either class is missing.
+    Build same-problem (correct, incorrect) pairs for Bradley-Terry loss.
+
+    Groups replay buffer records by problem text, then pairs every correct record
+    with every incorrect record on the same problem. Requires collect_paired_roles=True
+    in the collection config to populate the buffer with same-problem pairs.
+
+    Returns a shuffled list of (correct_record, incorrect_record) tuples.
     """
-    pos = [r for r in records if float(r.correctness) >= 0.5]
-    neg = [r for r in records if float(r.correctness) < 0.5]
-    if not pos or not neg:
-        out = records.copy()
-        random.shuffle(out)
-        return out
+    by_problem: Dict[str, Dict[str, List[SolutionRecord]]] = {}
+    for rec in records:
+        key = rec.problem
+        if key not in by_problem:
+            by_problem[key] = {"correct": [], "incorrect": []}
+        if float(rec.correctness) >= 0.5:
+            by_problem[key]["correct"].append(rec)
+        else:
+            by_problem[key]["incorrect"].append(rec)
 
-    n_batches = max(1, math.ceil(len(records) / max(1, batch_size)))
-    k_pos = batch_size // 2
-    k_neg = batch_size - k_pos
-
-    out: List[SolutionRecord] = []
-    for _ in range(n_batches):
-        out.extend(random.choices(pos, k=max(1, k_pos)))
-        out.extend(random.choices(neg, k=max(1, k_neg)))
-    random.shuffle(out)
-    return out
+    pairs: List[Tuple[SolutionRecord, SolutionRecord]] = []
+    for groups in by_problem.values():
+        for c_rec in groups["correct"]:
+            for i_rec in groups["incorrect"]:
+                pairs.append((c_rec, i_rec))
+    random.shuffle(pairs)
+    return pairs
 
 
 def _build_helpful_target_response(
@@ -284,10 +241,27 @@ def train_phase1(
     round_idx: int,
 ) -> float:
     """
-    Train verifiers and aggregator jointly on replay buffer (Equation 3).
+    NashUpdate (Algorithm 3): train verifiers + aggregator jointly on replay buffer
+    using Bradley-Terry pairwise ranking loss on same-problem (correct, incorrect) pairs.
 
-    Verifiers persist across rounds. The oversight rule determines the
-    loss function H used for training.
+    Loss per pair:
+        L = -log σ(τ · (f_correct - f_incorrect))
+          + λ · ((f_correct - 0.5)² + (f_incorrect - 0.5)²)
+
+    where f = aggregated oversight score ∈ [0,1], τ is temperature, λ is the
+    Kirchner-style centering regularizer that prevents scores from saturating.
+
+    Pairs are built by matching records that share the same problem text.
+    Requires collect_paired_roles=True in the collection config.
+
+    # TODO (PE-min / PE-margin): For optimized oversight rules, this function must be
+    # split into two phases per Algorithm 1:
+    #   1. train_oversight_f(): Reset f each round, train it on calibration data from
+    #      G(φ, π, D_V, c) to minimize H_PE-min or H_PE-margin (see oversight.py).
+    #      The verifier scores z_j serve as candidate labels, NOT the correctness c.
+    #   2. nash_update(): Freeze f, then train φ_j against l(f_frozen(x,y,z_{1:m}), c)
+    #      using Bradley-Terry on the frozen-aggregator output.
+    # For supervised mode (current), the two phases collapse into this single function.
     """
     if len(replay_buffer) < 10:
         return float("inf")
@@ -295,25 +269,24 @@ def train_phase1(
     train_cfg = config["training"]
     lr = float(train_cfg.get("verifier_lr", 1e-4))
     epochs = int(train_cfg.get("verifier_epochs", 3))
-    batch_size = min(int(train_cfg.get("verifier_batch_size", 8)), len(replay_buffer))
-    oversight_rule = train_cfg.get("oversight_rule", "supervised")
-    dropout_p = float(train_cfg.get("verifier_dropout", 0.0))
-    softmin_beta = float(train_cfg.get("softmin_beta", 5.0))
-    micro_step = bool(train_cfg.get("phase1_micro_step", True))
-    balance_labels = bool(train_cfg.get("phase1_balance_labels", True))
-    stratified_batches = bool(train_cfg.get("phase1_stratified_batches", True))
-    separation_lambda = float(train_cfg.get("phase1_separation_lambda", 0.0))
-    separation_margin = float(train_cfg.get("phase1_separation_margin", 0.1))
-    separation_min_per_class = int(train_cfg.get("phase1_separation_min_per_class", 1))
-    use_separation_loss = (
-        oversight_rule == "supervised"
-        and separation_lambda > 0.0
-    )
+    bt_temperature = float(train_cfg.get("bt_temperature", 4.0))
+    bt_centering_lambda = float(train_cfg.get("bt_centering_lambda", 0.01))
+
+    records = replay_buffer.get_all()
+    pairs = _build_bt_pairs(records)
 
     print(f"\n{'─'*60}")
-    print(f"PHASE 1: NASH UPDATE (oversight_rule={oversight_rule})")
-    print(f"Training on {len(replay_buffer)} buffered solutions")
+    print(f"PHASE 1: NASH UPDATE (Bradley-Terry pairwise)")
+    print(
+        f"  {len(pairs)} same-problem pairs from {len(records)} buffer records "
+        f"(τ={bt_temperature}, λ_center={bt_centering_lambda})"
+    )
     print(f"{'─'*60}")
+
+    if not pairs:
+        print("  No same-problem pairs in buffer; skipping Phase 1.")
+        print("  Ensure collect_paired_roles=true in config.")
+        return float("inf")
 
     ensemble.unfreeze_all()
     all_params = ensemble.get_all_trainable_params()
@@ -322,189 +295,56 @@ def train_phase1(
         return float("inf")
 
     optimizer = torch.optim.AdamW(all_params, lr=lr, weight_decay=0.01)
-
-    records = replay_buffer.get_all()
-    pos_w, neg_w, n_pos, n_neg = _compute_label_weights(records)
-    use_stratified = oversight_rule == "supervised" and stratified_batches and n_pos > 0 and n_neg > 0
-    use_weighted_bce = oversight_rule == "supervised" and balance_labels and not use_stratified
-
-    if oversight_rule == "supervised" and use_stratified:
-        print(f"  Stratified batches enabled (positives={n_pos}, negatives={n_neg})")
-    if oversight_rule == "supervised" and use_weighted_bce:
-        print(
-            f"  Label balance: positives={n_pos}, negatives={n_neg}, "
-            f"weights(pos/neg)=({pos_w:.3f}/{neg_w:.3f})"
-        )
-    if use_separation_loss:
-        print(
-            f"  Separation loss enabled: lambda={separation_lambda:g}, "
-            f"margin={separation_margin:g}, min_per_class={separation_min_per_class}"
-        )
-        if micro_step:
-            print("  Note: separation loss is applied in batched mode; disable phase1_micro_step for effect.")
     final_loss = float("inf")
 
     for epoch in range(epochs):
-        if use_stratified:
-            epoch_records = _build_stratified_epoch_records(records, batch_size)
-        else:
-            epoch_records = records.copy()
-            random.shuffle(epoch_records)
-        epoch_loss, n_batches = 0.0, 0
+        random.shuffle(pairs)
+        epoch_loss, n_updates = 0.0, 0
 
-        for bstart in range(0, len(epoch_records), batch_size):
-            batch = epoch_records[bstart:bstart + batch_size]
+        for c_rec, i_rec in pairs:
+            optimizer.zero_grad()
+            try:
+                # Forward: correct answer on this problem
+                _, f_correct = ensemble.compute_oversight_score_training(
+                    c_rec.problem, c_rec.response, "",
+                )
+                # Forward: incorrect answer on the same problem
+                _, f_incorrect = ensemble.compute_oversight_score_training(
+                    i_rec.problem, i_rec.response, "",
+                )
 
-            if micro_step:
-                for rec in batch:
+                # Bradley-Terry: -log σ(τ · (f_correct - f_incorrect))
+                bt_loss = -F.logsigmoid(bt_temperature * (f_correct - f_incorrect))
+
+                # L2 centering (Kirchner regularizer, adapted for [0,1] scores):
+                # penalizes scores drifting far from 0.5
+                centering = bt_centering_lambda * (
+                    (f_correct - 0.5).pow(2) + (f_incorrect - 0.5).pow(2)
+                )
+
+                loss = bt_loss + centering
+
+                if torch.isnan(loss) or torch.isinf(loss):
                     optimizer.zero_grad()
-                    try:
-                        score_tensors, oversight = ensemble.compute_oversight_score_training(
-                            rec.problem, rec.response, "",
-                        )
-                        target = torch.tensor(
-                            rec.correctness, device=ensemble.aggregator_device,
-                            dtype=torch.float32,
-                        )
-
-                        # Choose H based on oversight rule
-                        if oversight_rule in ("pe_min", "pe_margin"):
-                            v_scores = torch.stack(score_tensors).unsqueeze(0)  # [1, m]
-                            f_out = oversight.unsqueeze(0)                      # [1]
-                            h_fn = OPTIMIZED_RULES[oversight_rule]
-                            loss = h_fn(f_out, v_scores, target)
-                        elif oversight_rule == "softmin":
-                            # Per-verifier losses for SoftMin (Appendix D)
-                            per_v = []
-                            for s in score_tensors:
-                                per_v.append(F.binary_cross_entropy(
-                                    s.clamp(1e-6, 1 - 1e-6), target,
-                                ))
-                            v_losses = torch.stack(per_v).unsqueeze(0)  # [1, m]
-                            if dropout_p > 0:
-                                keep_prob = 1.0 - dropout_p
-                                mask = torch.bernoulli(
-                                    torch.full_like(v_losses, keep_prob)
-                                )
-                                # Guard against all-dropped rows.
-                                if mask.sum(dim=-1).min().item() == 0:
-                                    ridx = random.randrange(ensemble.num_verifiers)
-                                    mask[:, ridx] = 1.0
-                            else:
-                                mask = torch.ones_like(v_losses)
-                            loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
-                        else:
-                            # Default: supervised BCE on aggregator output
-                            if use_weighted_bce:
-                                loss = _supervised_weighted_bce(
-                                    oversight=oversight,
-                                    target=target,
-                                    pos_w=pos_w,
-                                    neg_w=neg_w,
-                                )
-                            else:
-                                loss = h_supervised(oversight, None, target)
-
-                        if torch.isnan(loss) or torch.isinf(loss):
-                            optimizer.zero_grad()
-                            continue
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-                        optimizer.step()
-                        epoch_loss += loss.item()
-                        n_batches += 1
-                    except Exception as e:
-                        print(f"  Sample error: {e}")
-                        optimizer.zero_grad()
-                        continue
-                    if n_batches % 5 == 0:
-                        cleanup_memory()
-            else:
-                optimizer.zero_grad()
-                batch_losses = []
-                batch_oversights = []
-                batch_targets = []
-                for rec in batch:
-                    try:
-                        score_tensors, oversight = ensemble.compute_oversight_score_training(
-                            rec.problem, rec.response, "",
-                        )
-                        target = torch.tensor(
-                            rec.correctness, device=ensemble.aggregator_device,
-                            dtype=torch.float32,
-                        )
-
-                        if oversight_rule in ("pe_min", "pe_margin"):
-                            v_scores = torch.stack(score_tensors).unsqueeze(0)
-                            f_out = oversight.unsqueeze(0)
-                            h_fn = OPTIMIZED_RULES[oversight_rule]
-                            loss = h_fn(f_out, v_scores, target)
-                        elif oversight_rule == "softmin":
-                            per_v = []
-                            for s in score_tensors:
-                                per_v.append(F.binary_cross_entropy(
-                                    s.clamp(1e-6, 1 - 1e-6), target,
-                                ))
-                            v_losses = torch.stack(per_v).unsqueeze(0)
-                            if dropout_p > 0:
-                                keep_prob = 1.0 - dropout_p
-                                mask = torch.bernoulli(
-                                    torch.full_like(v_losses, keep_prob)
-                                )
-                                if mask.sum(dim=-1).min().item() == 0:
-                                    ridx = random.randrange(ensemble.num_verifiers)
-                                    mask[:, ridx] = 1.0
-                            else:
-                                mask = torch.ones_like(v_losses)
-                            loss = verifier_softmin_loss(v_losses, mask, softmin_beta)
-                        else:
-                            if use_weighted_bce:
-                                loss = _supervised_weighted_bce(
-                                    oversight=oversight,
-                                    target=target,
-                                    pos_w=pos_w,
-                                    neg_w=neg_w,
-                                )
-                            else:
-                                loss = h_supervised(oversight, None, target)
-
-                        if not (torch.isnan(loss) or torch.isinf(loss)):
-                            batch_losses.append(loss)
-                            if use_separation_loss:
-                                batch_oversights.append(oversight)
-                                batch_targets.append(target)
-                    except Exception as e:
-                        print(f"  Sample error: {e}")
-                        continue
-
-                if not batch_losses:
                     continue
-                total_loss = torch.stack(batch_losses).mean()
-                if use_separation_loss and batch_oversights:
-                    overs = torch.stack(batch_oversights)
-                    targs = torch.stack(batch_targets)
-                    pos_mask = targs >= 0.5
-                    neg_mask = targs < 0.5
-                    if (
-                        int(pos_mask.sum().item()) >= separation_min_per_class
-                        and int(neg_mask.sum().item()) >= separation_min_per_class
-                    ):
-                        sep = overs[pos_mask].mean() - overs[neg_mask].mean()
-                        sep_penalty = F.relu(
-                            torch.tensor(separation_margin, device=overs.device, dtype=overs.dtype) - sep
-                        )
-                        total_loss = total_loss + separation_lambda * sep_penalty
-                total_loss.backward()
+
+                loss.backward()
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
-                epoch_loss += total_loss.item()
-                n_batches += 1
-                if n_batches % 5 == 0:
-                    cleanup_memory()
+                epoch_loss += loss.item()
+                n_updates += 1
 
-        if n_batches > 0:
-            avg = epoch_loss / n_batches
-            print(f"  Epoch {epoch+1}/{epochs}, oversight loss: {avg:.4f}")
+            except Exception as e:
+                print(f"  Pair error: {e}")
+                optimizer.zero_grad()
+                continue
+
+            if n_updates % 10 == 0:
+                cleanup_memory()
+
+        if n_updates > 0:
+            avg = epoch_loss / n_updates
+            print(f"  Epoch {epoch+1}/{epochs}, BT loss: {avg:.4f}")
             final_loss = avg
 
     ensemble.freeze_all()
@@ -531,9 +371,7 @@ def collect_prover_experiences(
     beta_1 = float(train_cfg.get("beta_1", 1.0))
     alpha_2 = float(train_cfg.get("alpha_2", -0.5))
     beta_2 = float(train_cfg.get("beta_2", 0.25))
-    reward_mode = str(train_cfg.get("reward_mode", "thresholded")).lower()
-    sneaky_margin_scale = float(train_cfg.get("sneaky_margin_scale", 1.0))
-    sneaky_correct_penalty = float(train_cfg.get("sneaky_correct_penalty", -1.0))
+    reward_mode = str(train_cfg.get("reward_mode", "affine")).lower()
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
     sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
@@ -660,9 +498,6 @@ def collect_prover_experiences(
             beta_1=beta_1,
             alpha_2=alpha_2,
             beta_2=beta_2,
-            fool_threshold=fool_threshold,
-            sneaky_margin_scale=sneaky_margin_scale,
-            sneaky_correct_penalty=sneaky_correct_penalty,
         )
 
         if role == "sneaky":
@@ -977,7 +812,16 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
                 require_grad=True,
                 forward_batch_size=min(len(b_prompts), ppo_forward_batch_size),
             )
-            if new_lp.numel() == 0:
+            # Coordinate skip across all ranks; a bare `continue` here would
+            # leave the other rank waiting on the next ALLREDUCE → NCCL deadlock.
+            skip_flag = torch.tensor(
+                1 if new_lp.numel() == 0 else 0,
+                device=device,
+                dtype=torch.int32,
+            )
+            dist.all_reduce(skip_flag, op=dist.ReduceOp.MAX)
+            if int(skip_flag.item()) != 0:
+                optimizer.zero_grad()
                 continue
             log_ratios = new_lp - b_old
             ratios = torch.exp(log_ratios.clamp(-20, 20))
@@ -1169,9 +1013,22 @@ def train_prover_ppo(
             result_path = checkpoint_path or (
                 f"/tmp/pmv_dist_ppo_{os.getpid()}_{int(time.time())}.pt"
             )
+            model_cfg = config["model"]
+            prover_device_str = str(getattr(prover, "device", "cuda:0"))
             initial_model_state = _to_cpu_state_dict(
                 prover.state_dict_checkpoint()["model_state"]
             )
+
+            # Free parent GPU models before spawning DDP workers.
+            # Each worker loads its own copy; having prover + base_prover +
+            # verifiers live in parent VRAM while workers start causes the
+            # gradient ALLREDUCE on cuda:1 to time out (NCCL SIGABRT).
+            prover.delete()
+            if base_prover is not None:
+                base_prover.delete()
+                base_prover = None
+            cleanup_memory(aggressive=True)
+
             global_stop_time = 0.0
             if should_stop_early is not None:
                 max_job_runtime_seconds = int(train_cfg.get("max_job_runtime_seconds", 0))
@@ -1201,7 +1058,21 @@ def train_prover_ppo(
                 nprocs=world_size,
                 join=True,
             )
-            load_prover_checkpoint(str(result_path), prover=prover, strict=False)
+            # Parent prover.model was freed before spawn; rebuild it from the
+            # DDP result checkpoint and hand the model back to the original object.
+            _post_prover = Prover(
+                model_name=model_cfg["prover_model"],
+                use_quantization=model_cfg.get("use_quantization", True),
+                lora_r=model_cfg.get("prover_lora_r", 8),
+                lora_alpha=model_cfg.get("prover_lora_alpha", 16),
+                preferred_device=prover_device_str,
+            )
+            load_prover_checkpoint(str(result_path), prover=_post_prover, strict=False)
+            prover.model = _post_prover.model
+            prover.tokenizer = _post_prover.tokenizer
+            prover.device = _post_prover.device
+            _post_prover.model = None
+            del _post_prover
             if on_progress_update is not None and target_updates > 0:
                 on_progress_update(target_updates)
             return

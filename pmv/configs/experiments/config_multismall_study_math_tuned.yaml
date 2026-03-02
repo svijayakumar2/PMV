@@ -37,15 +37,14 @@ training:
   verifier_max_length: 768
   auto_adjust_verifier_max_length: true
   verifier_prompt_margin: 256
-  phase1_micro_step: false
-  phase1_balance_labels: true
-  phase1_stratified_batches: true
-  phase1_separation_lambda: 0.5
-  phase1_separation_margin: 0.08
-  phase1_separation_min_per_class: 1
   verifier_dropout: 0.0
   softmin_beta: 5.0
   single_verifier_role: "computational_accuracy"
+  # Bradley-Terry pairwise verifier loss (replaces pointwise BCE).
+  # bt_temperature: margin multiplier τ in -log σ(τ·(f+ - f-)).
+  # bt_centering_lambda: Kirchner L2 regularizer weight λ to prevent score saturation.
+  bt_temperature: 4.0
+  bt_centering_lambda: 0.01
 
   prover_lr: 1.0e-5
   ppo_epochs: 4
@@ -93,8 +92,6 @@ training:
   alpha_2: -2.0
   beta_2: -1.0
   sneaky_fool_threshold: 0.5
-  sneaky_margin_scale: 1.0
-  sneaky_correct_penalty: -1.0
   supervised_single_identity: true
   # Multi-GPU verifier acceleration knobs.
   multi_gpu_verifier_parallel: true
