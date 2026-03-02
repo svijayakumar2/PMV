@@ -92,14 +92,18 @@ def _write_csv(path: Path, rows: List[Dict]):
 
 
 def _supports_eval_flag(flag: str) -> bool:
-    help_txt = subprocess.run(
-        ["python3", "-u", "-m", "pmv.evaluation", "-h"],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    ).stdout
-    return flag in help_txt
+    try:
+        help_txt = subprocess.run(
+            ["python3", "-u", "-m", "pmv.evaluation", "-h"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        ).stdout
+        return flag in help_txt
+    except Exception:
+        return False
 
 
 def main():
