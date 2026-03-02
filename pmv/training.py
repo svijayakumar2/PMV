@@ -73,6 +73,7 @@ def reward_function(
 
 def _build_bt_pairs(
     records: List[SolutionRecord],
+    max_pairs_per_problem: int = 4,
 ) -> List[Tuple[SolutionRecord, SolutionRecord]]:
     """
     Build same-problem (correct, incorrect) pairs for Bradley-Terry loss.
@@ -95,9 +96,13 @@ def _build_bt_pairs(
 
     pairs: List[Tuple[SolutionRecord, SolutionRecord]] = []
     for groups in by_problem.values():
+        problem_pairs: List[Tuple[SolutionRecord, SolutionRecord]] = []
         for c_rec in groups["correct"]:
             for i_rec in groups["incorrect"]:
-                pairs.append((c_rec, i_rec))
+                problem_pairs.append((c_rec, i_rec))
+        # Shuffle within-problem so the cap picks a random subset each epoch.
+        random.shuffle(problem_pairs)
+        pairs.extend(problem_pairs[:max_pairs_per_problem])
     random.shuffle(pairs)
     return pairs
 
@@ -271,9 +276,11 @@ def train_phase1(
     epochs = int(train_cfg.get("verifier_epochs", 3))
     bt_temperature = float(train_cfg.get("bt_temperature", 4.0))
     bt_centering_lambda = float(train_cfg.get("bt_centering_lambda", 0.01))
+    bt_accumulate_steps = max(1, int(train_cfg.get("bt_accumulate_steps", 8)))
+    bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 4)))
 
     records = replay_buffer.get_all()
-    pairs = _build_bt_pairs(records)
+    pairs = _build_bt_pairs(records, max_pairs_per_problem=bt_max_pairs_per_problem)
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (Bradley-Terry pairwise)")
@@ -300,9 +307,11 @@ def train_phase1(
     for epoch in range(epochs):
         random.shuffle(pairs)
         epoch_loss, n_updates = 0.0, 0
+        accum_loss = torch.tensor(0.0, device=ensemble.aggregator_device, requires_grad=False)
+        accum_valid = 0
+        optimizer.zero_grad()
 
-        for c_rec, i_rec in pairs:
-            optimizer.zero_grad()
+        for pair_idx, (c_rec, i_rec) in enumerate(pairs):
             try:
                 # Forward: correct answer on this problem
                 _, f_correct = ensemble.compute_oversight_score_training(
@@ -322,25 +331,30 @@ def train_phase1(
                     (f_correct - 0.5).pow(2) + (f_incorrect - 0.5).pow(2)
                 )
 
-                loss = bt_loss + centering
+                loss = (bt_loss + centering) / bt_accumulate_steps
 
                 if torch.isnan(loss) or torch.isinf(loss):
-                    optimizer.zero_grad()
                     continue
 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-                optimizer.step()
-                epoch_loss += loss.item()
-                n_updates += 1
+                accum_loss = accum_loss + loss.detach()
+                accum_valid += 1
 
             except Exception as e:
                 print(f"  Pair error: {e}")
-                optimizer.zero_grad()
                 continue
 
-            if n_updates % 10 == 0:
-                cleanup_memory()
+            is_last = pair_idx == len(pairs) - 1
+            if accum_valid > 0 and (((pair_idx + 1) % bt_accumulate_steps == 0) or is_last):
+                torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                epoch_loss += float(accum_loss.item()) * bt_accumulate_steps
+                n_updates += accum_valid
+                accum_loss = torch.tensor(0.0, device=ensemble.aggregator_device, requires_grad=False)
+                accum_valid = 0
+                if n_updates % max(1, 10 * bt_accumulate_steps) == 0:
+                    cleanup_memory()
 
         if n_updates > 0:
             avg = epoch_loss / n_updates
