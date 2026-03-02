@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 455, in <module>
+    main()
+  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 212, in main
+    save_probe_supported = _supports_eval_flag("--save-probe-records")
+  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 95, in _supports_eval_flag
+    help_txt = subprocess.run(
+  File "/usr/lib64/python3.9/subprocess.py", line 507, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/usr/lib64/python3.9/subprocess.py", line 1121, in communicate
+    stdout = self.stdout.read()
+KeyboardInterrupt
