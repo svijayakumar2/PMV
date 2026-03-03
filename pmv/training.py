@@ -71,6 +71,26 @@ def reward_function(
     return alpha_2 + beta_2 * f_score
 
 
+def _resolve_ppo_early_stop_mode(train_cfg: Dict) -> str:
+    """
+    Resolve PPO plateau-stop behavior.
+
+    Modes:
+      - loss: legacy behavior, stop on plateau of running PPO loss
+      - full: never stop on PPO-loss plateau; only external runtime budgets apply
+    """
+    raw_mode = train_cfg.get("ppo_early_stop_mode")
+    if raw_mode is None:
+        enabled = bool(train_cfg.get("ppo_early_stop_enable", False))
+        return "loss" if enabled else "full"
+    mode = str(raw_mode).strip().lower()
+    if mode not in {"loss", "full"}:
+        raise ValueError(
+            f"Unknown ppo_early_stop_mode={raw_mode!r}. Expected 'loss' or 'full'."
+        )
+    return mode
+
+
 def _build_bt_pairs(
     records: List[SolutionRecord],
     max_pairs_per_problem: int = 4,
@@ -375,7 +395,7 @@ def collect_prover_experiences(
     math_dataset,
     config: Dict,
     round_idx: int,
-) -> Tuple[List[str], List[str], List[float], List[SolutionRecord]]:
+) -> Tuple[List[str], List[str], List[float], List[SolutionRecord], List[SolutionRecord]]:
     """Generate solutions and compute rewards with direct verifier scoring."""
     train_cfg = config["training"]
     dataset_type = str(config.get("dataset", {}).get("type", "math")).lower()
@@ -398,12 +418,21 @@ def collect_prover_experiences(
     collect_paired_roles = bool(train_cfg.get("collect_paired_roles", False))
     sneaky_retries_for_incorrect = int(train_cfg.get("sneaky_retries_for_incorrect", 1))
     sneaky_select_hard_negative = bool(train_cfg.get("sneaky_select_hard_negative", True))
+    sneaky_replay_persist_incorrect_candidates = bool(
+        train_cfg.get("sneaky_replay_persist_incorrect_candidates", False)
+    )
+    sneaky_replay_incorrect_top_k = int(
+        train_cfg.get("sneaky_replay_incorrect_top_k", 0)
+    )
+    paired_helpful_oracle_on_failure = bool(
+        train_cfg.get("paired_helpful_oracle_on_failure", False)
+    )
     collect_early_stop_enable = bool(train_cfg.get("collect_early_stop_enable", False))
     collect_early_check_every = max(1, int(train_cfg.get("collect_early_check_every", 20)))
     collect_early_min_episodes = max(1, int(train_cfg.get("collect_early_min_episodes", 80)))
     collect_early_stop_epsilon = float(train_cfg.get("collect_early_stop_epsilon", 0.05))
 
-    prompts, responses, rewards, records = [], [], [], []
+    prompts, responses, rewards, records, replay_only_records = [], [], [], [], []
     prover.model.eval()
     final_line_count = 0
     sneaky_total = 0
@@ -411,10 +440,63 @@ def collect_prover_experiences(
     sneaky_fooled = 0
     sneaky_f_values = []
     helpful_f_values = []
+    replay_record_keys = set()
+    replay_extra_incorrect = 0
+    replay_oracle_helpful = 0
     paired_problem = None
     paired_solution_true = None
 
     print(f"\nCollecting {num_episodes} episodes...")
+
+    def _record_key(problem_text: str, response_text: str, role_name: str, is_correct_local: bool):
+        return (problem_text, response_text, role_name, 1 if is_correct_local else 0)
+
+    def _append_replay_record(
+        *,
+        problem_text: str,
+        solution_true_text: str,
+        response_text: str,
+        is_correct_local: bool,
+        verifier_scores_local=None,
+        f_score_local=None,
+        role_name: str,
+    ) -> bool:
+        key = _record_key(problem_text, response_text, role_name, is_correct_local)
+        if key in replay_record_keys:
+            return False
+        replay_record_keys.add(key)
+        replay_only_records.append(SolutionRecord(
+            problem=problem_text,
+            solution_true=solution_true_text,
+            response=response_text,
+            correctness=1.0 if is_correct_local else 0.0,
+            verifier_scores=verifier_scores_local,
+            oversight_score=f_score_local,
+            role=role_name,
+            round_generated=round_idx,
+        ))
+        return True
+
+    def _append_generated_record(
+        *,
+        problem_text: str,
+        solution_true_text: str,
+        response_text: str,
+        is_correct_local: bool,
+        verifier_scores_local=None,
+        f_score_local=None,
+        role_name: str,
+    ):
+        records.append(SolutionRecord(
+            problem=problem_text,
+            solution_true=solution_true_text,
+            response=response_text,
+            correctness=1.0 if is_correct_local else 0.0,
+            verifier_scores=verifier_scores_local,
+            oversight_score=f_score_local,
+            role=role_name,
+            round_generated=round_idx,
+        ))
 
     for ep in range(num_episodes):
         if round_idx <= helpful_only_rounds:
@@ -497,9 +579,50 @@ def collect_prover_experiences(
                 if chosen is None:
                     chosen = candidates[-1]
                 response, is_correct, verifier_scores, f_score = chosen
+            if sneaky_replay_persist_incorrect_candidates:
+                incorrect_candidates = [c for c in candidates if not c[1]]
+                incorrect_candidates.sort(key=lambda x: x[3], reverse=True)
+                if sneaky_replay_incorrect_top_k > 0:
+                    incorrect_candidates = incorrect_candidates[:sneaky_replay_incorrect_top_k]
+                for cand_resp, cand_correct, cand_v_scores, cand_f in incorrect_candidates:
+                    if cand_resp == response and cand_correct == is_correct:
+                        continue
+                    added = _append_replay_record(
+                        problem_text=problem,
+                        solution_true_text=solution_true,
+                        response_text=cand_resp,
+                        is_correct_local=cand_correct,
+                        verifier_scores_local=cand_v_scores,
+                        f_score_local=cand_f,
+                        role_name=role,
+                    )
+                    if added:
+                        replay_extra_incorrect += 1
         else:
             response = _gen_once(gen_temp, gen_do_sample)
             is_correct, verifier_scores, f_score = _score_response(response)
+            if (
+                collect_paired_roles
+                and paired_helpful_oracle_on_failure
+                and not is_correct
+            ):
+                oracle_response = _build_helpful_target_response(
+                    math_dataset,
+                    solution_true,
+                    dataset_type=dataset_type,
+                )
+                if oracle_response is not None:
+                    added = _append_replay_record(
+                        problem_text=problem,
+                        solution_true_text=solution_true,
+                        response_text=oracle_response,
+                        is_correct_local=True,
+                        verifier_scores_local=None,
+                        f_score_local=None,
+                        role_name="helpful",
+                    )
+                    if added:
+                        replay_oracle_helpful += 1
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
 
@@ -527,12 +650,15 @@ def collect_prover_experiences(
         prompts.append(prompt)
         responses.append(response)
         rewards.append(r)
-        records.append(SolutionRecord(
-            problem=problem, solution_true=solution_true, response=response,
-            correctness=1.0 if is_correct else 0.0,
-            verifier_scores=verifier_scores,
-            oversight_score=f_score, role=role, round_generated=round_idx,
-        ))
+        _append_generated_record(
+            problem_text=problem,
+            solution_true_text=solution_true,
+            response_text=response,
+            is_correct_local=is_correct,
+            verifier_scores_local=verifier_scores,
+            f_score_local=f_score,
+            role_name=role,
+        )
         if (ep + 1) % 10 == 0:
             print(
                 f"  Episode {ep+1}/{num_episodes}, role={role}, "
@@ -579,10 +705,11 @@ def collect_prover_experiences(
         f"Collection diagnostics: FINAL format {final_line_count}/{num_episodes} "
         f"({final_rate:.2%}), sneaky incorrect {sneaky_incorrect}/{max(1, sneaky_total)}, "
         f"sneaky fooled@{fool_threshold:.2f} {sneaky_fooled}/{max(1, sneaky_total)}, "
-        f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f})"
+        f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f}), "
+        f"replay extras (sneaky/oracle)=({replay_extra_incorrect}/{replay_oracle_helpful})"
     )
 
-    return prompts, responses, rewards, records
+    return prompts, responses, rewards, records, replay_only_records
 
 
 def compute_log_probs_batch(
@@ -742,7 +869,8 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
         ppo_resume_checkpoint_interval = max(
             1, int(train_cfg.get("ppo_resume_checkpoint_interval", 200))
         )
-        ppo_early_stop_enable = bool(train_cfg.get("ppo_early_stop_enable", False))
+        ppo_early_stop_mode = _resolve_ppo_early_stop_mode(train_cfg)
+        ppo_early_stop_enable = (ppo_early_stop_mode == "loss")
         ppo_early_stop_patience_windows = max(
             1, int(train_cfg.get("ppo_early_stop_patience_windows", 4))
         )
@@ -784,7 +912,8 @@ def _distributed_ppo_worker(rank: int, world_size: int, worker: Dict):
             print(
                 "  PPO distributed mode: "
                 f"world_size={world_size}, target_updates={target_updates}, "
-                f"global_batch_size={global_batch_size}, start_update={start_update}"
+                f"global_batch_size={global_batch_size}, start_update={start_update}, "
+                f"early_stop_mode={ppo_early_stop_mode}"
             )
 
         for step in range(start_update, target_updates):
@@ -975,7 +1104,8 @@ def train_prover_ppo(
     prover_distributed_world_size = max(
         1, int(train_cfg.get("prover_distributed_world_size", 2))
     )
-    ppo_early_stop_enable = bool(train_cfg.get("ppo_early_stop_enable", False))
+    ppo_early_stop_mode = _resolve_ppo_early_stop_mode(train_cfg)
+    ppo_early_stop_enable = (ppo_early_stop_mode == "loss")
     ppo_early_stop_patience_windows = max(
         1, int(train_cfg.get("ppo_early_stop_patience_windows", 4))
     )
@@ -1177,7 +1307,8 @@ def train_prover_ppo(
         stale_windows = 0
         print(
             f"  PPO fixed-update mode: target_updates={target_updates}, "
-            f"batch_size={batch_size}, start_update={start_update}"
+            f"batch_size={batch_size}, start_update={start_update}, "
+            f"early_stop_mode={ppo_early_stop_mode}"
         )
         for step in range(start_update, target_updates):
             if should_stop_early is not None and should_stop_early():

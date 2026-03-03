@@ -364,6 +364,7 @@ def main(config_path: str = "configs/config.yaml"):
         responses = []
         rewards = []
         new_records = []
+        replay_only_records = []
         ppo_resume_update_idx = 0
 
         if is_resume_inflight_round:
@@ -376,6 +377,7 @@ def main(config_path: str = "configs/config.yaml"):
             responses = list(resume_inflight_context.get("responses", []))
             rewards = list(resume_inflight_context.get("rewards", []))
             new_records = list(resume_inflight_context.get("new_records", []))
+            replay_only_records = list(resume_inflight_context.get("replay_only_records", []))
             ppo_resume_update_idx = int(resume_inflight_step)
             if not prompts or len(prompts) != len(responses) or len(prompts) != len(rewards):
                 raise RuntimeError(
@@ -445,7 +447,7 @@ def main(config_path: str = "configs/config.yaml"):
                 cleanup_memory()
                 break
 
-            prompts, responses, rewards, new_records = collect_prover_experiences(
+            prompts, responses, rewards, new_records, replay_only_records = collect_prover_experiences(
                 prover, ensemble, dataset, config, round_idx,
             )
             if rewards:
@@ -487,6 +489,7 @@ def main(config_path: str = "configs/config.yaml"):
                     "responses": responses,
                     "rewards": rewards,
                     "new_records": new_records,
+                    "replay_only_records": replay_only_records,
                 },
             )
             # Save prover state for PPO resume.
@@ -531,6 +534,7 @@ def main(config_path: str = "configs/config.yaml"):
             checkpoint_config_path=config_path,
         )
         replay_buffer.add_batch(new_records)
+        replay_buffer.add_batch(replay_only_records)
         print(f"Buffer size: {len(replay_buffer)}")
 
         if inflight_context_alias.exists():

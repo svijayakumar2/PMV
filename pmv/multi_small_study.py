@@ -146,6 +146,12 @@ def main():
         help="Override PPO plateau early stopping in training config.",
     )
     parser.add_argument(
+        "--ppo-early-stop-mode",
+        choices=["loss", "full"],
+        default=None,
+        help="PPO early-stop mode: 'loss' uses plateau stop, 'full' always runs the full PPO budget.",
+    )
+    parser.add_argument(
         "--collect-early-stop-enable",
         type=int,
         choices=[0, 1],
@@ -246,6 +252,8 @@ def main():
             cfg["training"]["ppo_target_updates_per_round"] = int(args.ppo_target_updates_per_round)
         if args.ppo_early_stop_enable is not None:
             cfg["training"]["ppo_early_stop_enable"] = bool(args.ppo_early_stop_enable)
+        if args.ppo_early_stop_mode is not None:
+            cfg["training"]["ppo_early_stop_mode"] = str(args.ppo_early_stop_mode)
         if args.collect_early_stop_enable is not None:
             cfg["training"]["collect_early_stop_enable"] = bool(args.collect_early_stop_enable)
         if args.prover_data_parallel is not None:
@@ -287,6 +295,7 @@ def main():
                     "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
                     "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
                     "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
+                    "ppo_early_stop_mode": cfg.get("training", {}).get("ppo_early_stop_mode"),
                     "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
                     "prover_data_parallel": cfg.get("training", {}).get("prover_data_parallel"),
                     "prover_distributed_ppo": cfg.get("training", {}).get("prover_distributed_ppo"),
@@ -371,6 +380,7 @@ def main():
                 "helpful_warmup_steps": cfg.get("training", {}).get("helpful_warmup_steps"),
                 "ppo_target_updates_per_round": cfg.get("training", {}).get("ppo_target_updates_per_round"),
                 "ppo_early_stop_enable": cfg.get("training", {}).get("ppo_early_stop_enable"),
+                "ppo_early_stop_mode": cfg.get("training", {}).get("ppo_early_stop_mode"),
                 "collect_early_stop_enable": cfg.get("training", {}).get("collect_early_stop_enable"),
                 "prover_data_parallel": cfg.get("training", {}).get("prover_data_parallel"),
                 "prover_distributed_ppo": cfg.get("training", {}).get("prover_distributed_ppo"),
@@ -414,6 +424,7 @@ def main():
             "helpful_warmup_steps": args.helpful_warmup_steps,
             "ppo_target_updates_per_round": args.ppo_target_updates_per_round,
             "ppo_early_stop_enable": args.ppo_early_stop_enable,
+            "ppo_early_stop_mode": args.ppo_early_stop_mode,
             "collect_early_stop_enable": args.collect_early_stop_enable,
             "prover_data_parallel": args.prover_data_parallel,
             "prover_distributed_ppo": args.prover_distributed_ppo,

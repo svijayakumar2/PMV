@@ -59,6 +59,8 @@ training:
   ppo_log_every: 200
   ppo_resume_checkpoint_interval: 100
   ppo_early_stop_enable: true
+  # "loss" preserves plateau stopping; "full" forces the full PPO budget.
+  ppo_early_stop_mode: "loss"
   ppo_early_stop_patience_windows: 4
   ppo_early_stop_min_delta: 5.0e-4
   ppo_early_stop_warmup_updates: 1000
@@ -85,6 +87,13 @@ training:
   collect_paired_roles: true
   sneaky_retries_for_incorrect: 2
   sneaky_select_hard_negative: true
+  # Keep more same-problem incorrect candidates for Phase 1 BT updates.
+  sneaky_replay_persist_incorrect_candidates: true
+  # <=0 means keep all incorrect candidates from sneaky retries.
+  sneaky_replay_incorrect_top_k: 0
+  # If paired helpful generation misses, add a checker-validated oracle-correct
+  # helpful record for the same problem into replay for future Phase 1.
+  paired_helpful_oracle_on_failure: true
   sneaky_max_new_tokens: 512
   helpful_warmup_max_length: 1024
   ppo_max_length: 1024
