@@ -45,10 +45,22 @@ training:
   # bt_centering_lambda: Kirchner L2 regularizer weight λ to prevent score saturation.
   # bt_accumulate_steps: gradient accumulation over N pairs before optimizer.step().
   # bt_max_pairs_per_problem: cap cross-product pairs per problem (prevents quadratic blowup).
+  # New objective terms:
+  # bt_margin / bt_margin_lambda: explicit required gap m between correct/incorrect oversight scores.
+  # bt_anchor_lambda / bt_target_*: push absolute scores away from 0.5 compression.
+  # bt_verifier_aux_lambda: enforce per-verifier ranking (not only aggregate ranking).
   bt_temperature: 4.0
-  bt_centering_lambda: 0.01
+  bt_hard_negative_pairs: true
+  bt_centering_lambda: 0.0
+  bt_margin: 0.08
+  bt_margin_lambda: 0.5
+  bt_anchor_lambda: 0.05
+  bt_target_correct: 0.8
+  bt_target_incorrect: 0.2
+  bt_verifier_aux_lambda: 0.2
+  bt_verifier_temperature: 4.0
   bt_accumulate_steps: 8
-  bt_max_pairs_per_problem: 4
+  bt_max_pairs_per_problem: 8
 
   prover_lr: 1.0e-5
   ppo_epochs: 4

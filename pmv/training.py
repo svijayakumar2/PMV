@@ -94,6 +94,7 @@ def _resolve_ppo_early_stop_mode(train_cfg: Dict) -> str:
 def _build_bt_pairs(
     records: List[SolutionRecord],
     max_pairs_per_problem: int = 4,
+    prioritize_hard_negatives: bool = False,
 ) -> List[Tuple[SolutionRecord, SolutionRecord]]:
     """
     Build same-problem (correct, incorrect) pairs for Bradley-Terry loss.
@@ -103,6 +104,8 @@ def _build_bt_pairs(
     in the collection config to populate the buffer with same-problem pairs.
 
     Returns a shuffled list of (correct_record, incorrect_record) tuples.
+    When prioritize_hard_negatives=True, selects within-problem pairs whose
+    incorrect samples currently have the highest oversight scores.
     """
     by_problem: Dict[str, Dict[str, List[SolutionRecord]]] = {}
     for rec in records:
@@ -120,8 +123,20 @@ def _build_bt_pairs(
         for c_rec in groups["correct"]:
             for i_rec in groups["incorrect"]:
                 problem_pairs.append((c_rec, i_rec))
-        # Shuffle within-problem so the cap picks a random subset each epoch.
-        random.shuffle(problem_pairs)
+        if prioritize_hard_negatives:
+            # Prefer pairs where incorrect samples still receive high oversight scores.
+            # These are the highest-value negatives for improving robustness.
+            problem_pairs.sort(
+                key=lambda pair: (
+                    float(pair[1].oversight_score)
+                    if pair[1].oversight_score is not None
+                    else 0.5
+                ),
+                reverse=True,
+            )
+        else:
+            # Shuffle within-problem so the cap picks a random subset each epoch.
+            random.shuffle(problem_pairs)
         pairs.extend(problem_pairs[:max_pairs_per_problem])
     random.shuffle(pairs)
     return pairs
@@ -270,8 +285,22 @@ def train_phase1(
     using Bradley-Terry pairwise ranking loss on same-problem (correct, incorrect) pairs.
 
     Loss per pair:
-        L = -log σ(τ · (f_correct - f_incorrect))
-          + λ · ((f_correct - 0.5)² + (f_incorrect - 0.5)²)
+        L = BT + Center + Margin + Anchor + VerifierAux
+
+      BT:
+        -log σ(τ · (f_correct - f_incorrect))
+
+      Center (legacy Kirchner-style anti-saturation):
+        λ_center · ((f_correct - 0.5)² + (f_incorrect - 0.5)²)
+
+      Margin (explicit spread target):
+        λ_margin · [m - (f_correct - f_incorrect)]²_+
+
+      Anchor (absolute calibration pressure):
+        λ_anchor · ((f_correct - t_pos)² + (f_incorrect - t_neg)²)
+
+      VerifierAux (prevent weak-individual/strong-aggregator failure mode):
+        λ_vaux · mean_j[-log σ(τ_v · (s_j_correct - s_j_incorrect))]
 
     where f = aggregated oversight score ∈ [0,1], τ is temperature, λ is the
     Kirchner-style centering regularizer that prevents scores from saturating.
@@ -295,18 +324,32 @@ def train_phase1(
     lr = float(train_cfg.get("verifier_lr", 1e-4))
     epochs = int(train_cfg.get("verifier_epochs", 3))
     bt_temperature = float(train_cfg.get("bt_temperature", 4.0))
+    bt_hard_negative_pairs = bool(train_cfg.get("bt_hard_negative_pairs", True))
     bt_centering_lambda = float(train_cfg.get("bt_centering_lambda", 0.01))
+    bt_margin = float(train_cfg.get("bt_margin", 0.0))
+    bt_margin_lambda = float(train_cfg.get("bt_margin_lambda", 0.0))
+    bt_anchor_lambda = float(train_cfg.get("bt_anchor_lambda", 0.0))
+    bt_target_correct = float(train_cfg.get("bt_target_correct", 0.8))
+    bt_target_incorrect = float(train_cfg.get("bt_target_incorrect", 0.2))
+    bt_verifier_aux_lambda = float(train_cfg.get("bt_verifier_aux_lambda", 0.0))
+    bt_verifier_temperature = float(train_cfg.get("bt_verifier_temperature", bt_temperature))
     bt_accumulate_steps = max(1, int(train_cfg.get("bt_accumulate_steps", 8)))
     bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 4)))
 
     records = replay_buffer.get_all()
-    pairs = _build_bt_pairs(records, max_pairs_per_problem=bt_max_pairs_per_problem)
+    pairs = _build_bt_pairs(
+        records,
+        max_pairs_per_problem=bt_max_pairs_per_problem,
+        prioritize_hard_negatives=bt_hard_negative_pairs,
+    )
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (Bradley-Terry pairwise)")
     print(
         f"  {len(pairs)} same-problem pairs from {len(records)} buffer records "
-        f"(τ={bt_temperature}, λ_center={bt_centering_lambda})"
+        f"(τ={bt_temperature}, λ_center={bt_centering_lambda}, "
+        f"m={bt_margin}, λ_margin={bt_margin_lambda}, "
+        f"λ_anchor={bt_anchor_lambda}, λ_vaux={bt_verifier_aux_lambda})"
     )
     print(f"{'─'*60}")
 
@@ -334,16 +377,17 @@ def train_phase1(
         for pair_idx, (c_rec, i_rec) in enumerate(pairs):
             try:
                 # Forward: correct answer on this problem
-                _, f_correct = ensemble.compute_oversight_score_training(
+                s_correct, f_correct = ensemble.compute_oversight_score_training(
                     c_rec.problem, c_rec.response, "",
                 )
                 # Forward: incorrect answer on the same problem
-                _, f_incorrect = ensemble.compute_oversight_score_training(
+                s_incorrect, f_incorrect = ensemble.compute_oversight_score_training(
                     i_rec.problem, i_rec.response, "",
                 )
 
                 # Bradley-Terry: -log σ(τ · (f_correct - f_incorrect))
-                bt_loss = -F.logsigmoid(bt_temperature * (f_correct - f_incorrect))
+                delta = (f_correct - f_incorrect)
+                bt_loss = -F.logsigmoid(bt_temperature * delta)
 
                 # L2 centering (Kirchner regularizer, adapted for [0,1] scores):
                 # penalizes scores drifting far from 0.5
@@ -351,7 +395,37 @@ def train_phase1(
                     (f_correct - 0.5).pow(2) + (f_incorrect - 0.5).pow(2)
                 )
 
-                loss = (bt_loss + centering) / bt_accumulate_steps
+                margin_loss = torch.zeros_like(bt_loss)
+                if bt_margin_lambda > 0.0 and bt_margin > 0.0:
+                    margin_loss = bt_margin_lambda * F.relu(bt_margin - delta).pow(2)
+
+                anchor_loss = torch.zeros_like(bt_loss)
+                if bt_anchor_lambda > 0.0:
+                    anchor_loss = bt_anchor_lambda * (
+                        (f_correct - bt_target_correct).pow(2)
+                        + (f_incorrect - bt_target_incorrect).pow(2)
+                    )
+
+                verifier_aux = torch.zeros_like(bt_loss)
+                if (
+                    bt_verifier_aux_lambda > 0.0
+                    and len(s_correct) == len(s_incorrect)
+                    and len(s_correct) > 0
+                ):
+                    per_verifier_bt = []
+                    for sc, si in zip(s_correct, s_incorrect):
+                        per_verifier_bt.append(
+                            -F.logsigmoid(bt_verifier_temperature * (sc - si))
+                        )
+                    verifier_aux = bt_verifier_aux_lambda * torch.stack(per_verifier_bt).mean()
+
+                loss = (
+                    bt_loss
+                    + centering
+                    + margin_loss
+                    + anchor_loss
+                    + verifier_aux
+                ) / bt_accumulate_steps
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     continue
