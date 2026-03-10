@@ -1,7 +1,7 @@
 {
   "run_metadata": {
-    "timestamp_utc": "2026-03-08T14:40:34.517276+00:00",
-    "job_id": "779963",
+    "timestamp_utc": "2026-03-10T21:46:59.754821+00:00",
+    "job_id": "821556",
     "seed": 0
   },
   "base_config": "pmv/configs/experiments/config_multismall_study_math_tuned.yaml",
