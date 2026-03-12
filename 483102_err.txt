@@ -1,71 +1,0 @@
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-`torch_dtype` is deprecated! Use `dtype` instead!
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/networkx/utils/backends.py:135: RuntimeWarning: networkx backend defined more than once: nx-loopback
-  backends.update(_get_backends("networkx.backends"))
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:08<00:08,  8.78s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:13<00:00,  6.37s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:13<00:00,  6.73s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:02<00:02,  2.94s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.45s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.52s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:02<00:02,  2.86s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.25s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.34s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:02<00:02,  2.80s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.12s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.22s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.13s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.38s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.49s/it]
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-W0228 11:42:37.123971 880072 torch/multiprocessing/spawn.py:169] Terminating process 881860 via signal SIGTERM
-Traceback (most recent call last):
-  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
-    return _run_code(code, main_globals, None,
-  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
-    exec(code, run_globals)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/main.py", line 603, in <module>
-    main(config_path)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/main.py", line 519, in main
-    train_prover_ppo(
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/training.py", line 1198, in train_prover_ppo
-    mp.spawn(
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 340, in spawn
-    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
-    while not context.join():
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 215, in join
-    raise ProcessRaisedException(msg, error_index, failed_process.pid)
-torch.multiprocessing.spawn.ProcessRaisedException: 
-
--- Process 0 terminated with the following error:
-Traceback (most recent call last):
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 90, in _wrap
-    fn(i, *args)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/training.py", line 853, in _distributed_ppo_worker
-    _dist_setup(rank=rank, world_size=world_size, master_port=int(worker["master_port"]))
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/training.py", line 837, in _dist_setup
-    torch.cuda.set_device(rank)
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/cuda/__init__.py", line 569, in set_device
-    torch._C._cuda_setDevice(device)
-torch.AcceleratorError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
-CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
-For debugging consider passing CUDA_LAUNCH_BLOCKING=1
-Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
-
-
-Traceback (most recent call last):
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 51, in _run_cmd
-    subprocess.run(cmd, check=True)
-  File "/usr/lib64/python3.9/subprocess.py", line 528, in run
-    raise CalledProcessError(retcode, process.args,
-subprocess.CalledProcessError: Command '['python3', '-u', '-m', 'pmv.main', 'results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/config_multi_small_3b_specialized.yaml']' returned non-zero exit status 1.
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
-    return _run_code(code, main_globals, None,
-  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
-    exec(code, run_globals)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 455, in <module>
-    main()
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 269, in main
-    _run_cmd(["python3", "-u", "-m", "pmv.main", str(cfg_path)])
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 62, in _run_cmd
-    raise RuntimeError(
-RuntimeError: Subprocess failed: python3 -u -m pmv.main results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/config_multi_small_3b_specialized.yaml :: returncode=1

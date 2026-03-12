@@ -1,83 +1,0 @@
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-`torch_dtype` is deprecated! Use `dtype` instead!
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/networkx/utils/backends.py:135: RuntimeWarning: networkx backend defined more than once: nx-loopback
-  backends.update(_get_backends("networkx.backends"))
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:12<00:12, 12.52s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:18<00:00,  8.58s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:18<00:00,  9.17s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:09<00:09,  9.20s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:11<00:00,  4.97s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:11<00:00,  5.61s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.42s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.62s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.74s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.48s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.66s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.79s/it]
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/sympy/parsing/latex/_parse_latex_antlr.py:23: UserWarning: antlr4.error.ErrorListener module is not installed
-  ErrorListener = import_module('antlr4.error.ErrorListener',
-<string>:1: SyntaxWarning: 'list' object is not callable; perhaps you missed a comma?
-<string>:1: SyntaxWarning: 'list' object is not callable; perhaps you missed a comma?
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:09<00:09,  9.12s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:14<00:00,  6.74s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:14<00:00,  7.10s/it]
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.18s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.44s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.55s/it]
-The following generation flags are not valid and may be ignored: ['temperature', 'top_p', 'top_k']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-  File "/usr/lib64/python3.9/multiprocessing/spawn.py", line 116, in spawn_main
-    exitcode = _main(fd, parent_sentinel)
-  File "/usr/lib64/python3.9/multiprocessing/spawn.py", line 126, in _main
-    self = reduction.pickle.load(from_parent)
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/reductions.py", line 181, in rebuild_cuda_tensor
-    storage = storage_cls._new_shared_cuda(
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/storage.py", line 1457, in _new_shared_cuda
-    return torch.UntypedStorage._new_shared_cuda(*args, **kwargs)
-torch.AcceleratorError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
-CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
-For debugging consider passing CUDA_LAUNCH_BLOCKING=1
-Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
-
-/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/transformers/utils/hub.py:110: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
-  warnings.warn(
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-  File "/usr/lib64/python3.9/multiprocessing/spawn.py", line 116, in spawn_main
-    exitcode = _main(fd, parent_sentinel)
-  File "/usr/lib64/python3.9/multiprocessing/spawn.py", line 126, in _main
-    self = reduction.pickle.load(from_parent)
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/reductions.py", line 181, in rebuild_cuda_tensor
-W0228 04:22:52.426952 740970 torch/multiprocessing/spawn.py:169] Terminating process 788510 via signal SIGTERM
-Traceback (most recent call last):
-  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
-    return _run_code(code, main_globals, None,
-  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
-    exec(code, run_globals)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/main.py", line 603, in <module>
-    main(config_path)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/main.py", line 519, in main
-    train_prover_ppo(
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/training.py", line 1185, in train_prover_ppo
-    mp.spawn(
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 340, in spawn
-    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
-    while not context.join():
-  File "/dccstor/principled_ai/users/saranyaibm2/xor/.venv/lib64/python3.9/site-packages/torch/multiprocessing/spawn.py", line 204, in join
-    raise ProcessExitedException(
-torch.multiprocessing.spawn.ProcessExitedException: process 0 terminated with exit code 1
-[W228 04:22:56.698049627 CudaIPCTypes.cpp:16] Producer process has been terminated before all shared CUDA tensors released. See Note [Sharing CUDA tensors]
-Traceback (most recent call last):
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 51, in _run_cmd
-    subprocess.run(cmd, check=True)
-  File "/usr/lib64/python3.9/subprocess.py", line 528, in run
-    raise CalledProcessError(retcode, process.args,
-subprocess.CalledProcessError: Command '['python3', '-u', '-m', 'pmv.main', 'results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/config_multi_small_3b_specialized.yaml']' returned non-zero exit status 1.
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/usr/lib64/python3.9/runpy.py", line 197, in _run_module_as_main
-    return _run_code(code, main_globals, None,
-  File "/usr/lib64/python3.9/runpy.py", line 87, in _run_code
-    exec(code, run_globals)
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 455, in <module>
-    main()
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 269, in main
-    _run_cmd(["python3", "-u", "-m", "pmv.main", str(cfg_path)])
-  File "/dccstor/principled_ai/users/saranyaibm2/PMV/pmv/multi_small_study.py", line 62, in _run_cmd
-    raise RuntimeError(
-RuntimeError: Subprocess failed: python3 -u -m pmv.main results/studies/multi_small_math_tuned/paper_budget_3v_8k_ddp/config_multi_small_3b_specialized.yaml :: returncode=1
