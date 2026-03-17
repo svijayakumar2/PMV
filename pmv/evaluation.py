@@ -268,6 +268,8 @@ def compute_balanced_best_of_n(
     helpful_temperature: float = 0.7,
     dataset_type: str = "math",
     progress_every: int = 5,
+    resume_enable: bool = False,
+    resume_path: Optional[str] = None,
 ) -> Dict:
     """
     Approximate Kirchner Figure 6(b):
@@ -284,8 +286,89 @@ def compute_balanced_best_of_n(
     acc_hits: Dict[int, float] = {n: 0.0 for n in n_values}
     acc_draws: Dict[int, int] = {n: 0 for n in n_values}
     eligible_problems: Dict[int, int] = {n: 0 for n in n_values}
+    completed_problems = 0
+    resumed = False
 
-    for p_idx in range(num_problems):
+    def _state_payload():
+        return {
+            "version": 1,
+            "settings": {
+                "n_values": list(n_values),
+                "num_problems": int(num_problems),
+                "samples_per_problem": int(samples_per_problem),
+                "draws_per_problem": int(max(1, draws_per_problem)),
+                "max_new_tokens": int(max_new_tokens),
+                "helpful_temperature": float(helpful_temperature),
+                "dataset_type": str(dataset_type),
+            },
+            "acc_hits": {str(k): float(v) for k, v in acc_hits.items()},
+            "acc_draws": {str(k): int(v) for k, v in acc_draws.items()},
+            "eligible_problems": {str(k): int(v) for k, v in eligible_problems.items()},
+            "completed_problems": int(completed_problems),
+            "random_state": random.getstate(),
+            "torch_rng_state": torch.random.get_rng_state(),
+            "cuda_rng_state_all": (
+                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            ),
+        }
+
+    def _save_resume_state(final_result: Optional[Dict] = None):
+        if not (resume_enable and resume_path):
+            return
+        payload = _state_payload()
+        if final_result is not None:
+            payload["final_result"] = final_result
+        os.makedirs(os.path.dirname(resume_path) or ".", exist_ok=True)
+        tmp = f"{resume_path}.tmp"
+        torch.save(payload, tmp)
+        os.replace(tmp, resume_path)
+
+    if resume_enable and resume_path and os.path.exists(resume_path):
+        try:
+            resume_payload = torch.load(resume_path, map_location="cpu", weights_only=False)
+            resume_settings = resume_payload.get("settings", {})
+            expected_settings = _state_payload()["settings"]
+            if resume_settings == expected_settings:
+                completed_problems = int(resume_payload.get("completed_problems", 0))
+                for n in n_values:
+                    acc_hits[n] = float((resume_payload.get("acc_hits", {}) or {}).get(str(n), 0.0))
+                    acc_draws[n] = int((resume_payload.get("acc_draws", {}) or {}).get(str(n), 0))
+                    eligible_problems[n] = int((resume_payload.get("eligible_problems", {}) or {}).get(str(n), 0))
+                if "random_state" in resume_payload:
+                    random.setstate(resume_payload["random_state"])
+                if "torch_rng_state" in resume_payload:
+                    torch.random.set_rng_state(resume_payload["torch_rng_state"])
+                if (
+                    torch.cuda.is_available()
+                    and resume_payload.get("cuda_rng_state_all") is not None
+                ):
+                    torch.cuda.set_rng_state_all(resume_payload["cuda_rng_state_all"])
+                resumed = completed_problems > 0
+                print(
+                    "  Resumed balanced best-of-n state:"
+                    f" completed_problems={completed_problems}/{num_problems}"
+                )
+                if completed_problems >= num_problems and isinstance(
+                    resume_payload.get("final_result"), dict
+                ):
+                    final_result = dict(resume_payload["final_result"])
+                    final_result["resume"] = {
+                        "enabled": True,
+                        "path": resume_path,
+                        "resumed": True,
+                        "completed_problems": completed_problems,
+                    }
+                    return final_result
+            else:
+                print(
+                    "  Best-of-n resume settings mismatch; starting fresh.\n"
+                    f"    resume_settings={resume_settings}\n"
+                    f"    expected_settings={expected_settings}"
+                )
+        except Exception as e:
+            print(f"  Warning: failed to load best-of-n resume state {resume_path}: {e}")
+
+    for p_idx in range(completed_problems, num_problems):
         problem, solution_true = _sample_for_eval(dataset)
         prompt = create_role_prompt(problem, "helpful", prover.tokenizer, dataset_type=dataset_type)
 
@@ -327,6 +410,9 @@ def compute_balanced_best_of_n(
                     acc_hits[n] += 0.5
                 acc_draws[n] += 1
 
+        completed_problems = p_idx + 1
+        _save_resume_state()
+
         if progress_every > 0 and (p_idx + 1) % progress_every == 0:
             print(f"  balanced best-of-n problem {p_idx + 1}/{num_problems}")
 
@@ -339,7 +425,7 @@ def compute_balanced_best_of_n(
             "eligible_problems": int(eligible_problems[n]),
         }
 
-    return {
+    result = {
         "enabled": True,
         "settings": {
             "n_values": n_values,
@@ -351,7 +437,15 @@ def compute_balanced_best_of_n(
             "dataset_type": str(dataset_type),
         },
         "per_n": per_n,
+        "resume": {
+            "enabled": bool(resume_enable and resume_path),
+            "path": resume_path,
+            "resumed": bool(resumed),
+            "completed_problems": int(completed_problems),
+        },
     }
+    _save_resume_state(final_result=result)
+    return result
 
 
 def collect_probe_metrics(
@@ -816,6 +910,17 @@ def main():
         help="SRC objective floor reward when centered score is non-positive.",
     )
     parser.add_argument(
+        "--kirchner-attack-resume-enable",
+        action="store_true",
+        help="Enable resume checkpoints for dedicated Kirchner attacker training.",
+    )
+    parser.add_argument(
+        "--kirchner-attack-resume-dir",
+        type=str,
+        default=None,
+        help="Directory for dedicated attacker resume checkpoints. Defaults to <output_stem>_kirchner_resume/.",
+    )
+    parser.add_argument(
         "--enable-balanced-bestofn",
         action="store_true",
         help="Run balanced best-of-n accuracy diagnostic (Figure 6b-style).",
@@ -856,6 +961,17 @@ def main():
         type=int,
         default=512,
         help="Generation length for balanced best-of-n completions.",
+    )
+    parser.add_argument(
+        "--bestofn-resume-enable",
+        action="store_true",
+        help="Enable resume checkpoints for balanced best-of-n evaluation.",
+    )
+    parser.add_argument(
+        "--bestofn-resume-path",
+        type=str,
+        default=None,
+        help="Checkpoint file for best-of-n resume state. Defaults to <output_stem>_bestofn_resume.pt.",
     )
 
     args = parser.parse_args()
@@ -1014,6 +1130,19 @@ def main():
         )
 
     kirchner_attack = {}
+    kirchner_resume_dir = None
+    if args.kirchner_attack_resume_enable and (
+        args.enable_kirchner_attack or args.enable_kirchner_attack_suite
+    ):
+        kirchner_resume_dir = args.kirchner_attack_resume_dir
+        if not kirchner_resume_dir:
+            out_path = Path(args.output)
+            kirchner_resume_dir = str(
+                out_path.parent / f"{out_path.stem}_kirchner_resume"
+            )
+        os.makedirs(kirchner_resume_dir, exist_ok=True)
+        print(f"Using Kirchner attack resume dir: {kirchner_resume_dir}")
+
     if args.enable_kirchner_attack:
         print("\nRunning dedicated attacker training (Kirchner-style exploitability)...")
         kirchner_attack = run_kirchner_style_attack_training(
@@ -1031,6 +1160,8 @@ def main():
             success_incorrect_rate=args.kirchner_success_incorrect_rate,
             success_score_gap_tol=args.kirchner_success_score_gap_tol,
             dataset_type=dataset_type,
+            resume_enable=args.kirchner_attack_resume_enable,
+            resume_dir=kirchner_resume_dir,
         )
 
     kirchner_attack_suite = {}
@@ -1055,11 +1186,23 @@ def main():
             success_score_gap_tol=args.kirchner_success_score_gap_tol,
             goodhart_success_max_accuracy=args.kirchner_goodhart_success_max_accuracy,
             dataset_type=dataset_type,
+            resume_enable=args.kirchner_attack_resume_enable,
+            resume_dir=kirchner_resume_dir,
         )
 
     balanced_bestofn = {}
     if args.enable_balanced_bestofn:
         print("\nRunning balanced best-of-n diagnostic...")
+        bestofn_resume_path = None
+        if args.bestofn_resume_enable:
+            bestofn_resume_path = args.bestofn_resume_path
+            if not bestofn_resume_path:
+                out_path = Path(args.output)
+                bestofn_resume_path = str(
+                    out_path.parent / f"{out_path.stem}_bestofn_resume.pt"
+                )
+            os.makedirs(os.path.dirname(bestofn_resume_path) or ".", exist_ok=True)
+            print(f"Using best-of-n resume path: {bestofn_resume_path}")
         balanced_bestofn = compute_balanced_best_of_n(
             prover=prover,
             ensemble=ensemble,
@@ -1072,6 +1215,8 @@ def main():
             helpful_temperature=args.bestofn_helpful_temperature,
             dataset_type=dataset_type,
             progress_every=max(5, args.bestofn_problems // 8),
+            resume_enable=args.bestofn_resume_enable,
+            resume_path=bestofn_resume_path,
         )
 
     thresholds = {

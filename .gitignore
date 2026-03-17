@@ -11,3 +11,16 @@ results/ablations_hb/
 results/checkpoints*/
 results/**/checkpoints*/
 results/**/*.pt
+
+# PMV generated artifacts (keep code clean; avoid huge status diffs)
+output_logs/
+results/studies/
+pmv/results/
+pmv/legacy/results/
+pmv/docs/paper_artifacts/**/eval_*.json
+pmv/docs/paper_artifacts/**/probe_records*.json
+pmv/docs/paper_artifacts/**/figures/*.png
+
+# Local office/temp files
+*.pptx
+~$*.pptx

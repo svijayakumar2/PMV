@@ -46,6 +46,8 @@ KIRCHNER_ATTACK_OBJECTIVES=${KIRCHNER_ATTACK_OBJECTIVES:-"src cgc goodhart"}
 KIRCHNER_GOODHART_SUCCESS_MAX_ACCURACY=${KIRCHNER_GOODHART_SUCCESS_MAX_ACCURACY:-0.2}
 KIRCHNER_CGC_MISALIGNED_PENALTY=${KIRCHNER_CGC_MISALIGNED_PENALTY:--2.0}
 KIRCHNER_SRC_FLOOR_REWARD=${KIRCHNER_SRC_FLOOR_REWARD:--1.0}
+KIRCHNER_ATTACK_RESUME_ENABLE=${KIRCHNER_ATTACK_RESUME_ENABLE:-1}
+KIRCHNER_ATTACK_RESUME_DIR=${KIRCHNER_ATTACK_RESUME_DIR:-}
 BALANCED_BESTOFN_ENABLE=${BALANCED_BESTOFN_ENABLE:-0}
 BESTOFN_N_VALUES=${BESTOFN_N_VALUES:-"2 4 8 16 32 64"}
 BESTOFN_PROBLEMS=${BESTOFN_PROBLEMS:-80}
@@ -53,6 +55,8 @@ BESTOFN_SAMPLES_PER_PROBLEM=${BESTOFN_SAMPLES_PER_PROBLEM:-64}
 BESTOFN_DRAWS_PER_PROBLEM=${BESTOFN_DRAWS_PER_PROBLEM:-8}
 BESTOFN_HELPFUL_TEMPERATURE=${BESTOFN_HELPFUL_TEMPERATURE:-0.7}
 BESTOFN_MAX_NEW_TOKENS=${BESTOFN_MAX_NEW_TOKENS:-512}
+BESTOFN_RESUME_ENABLE=${BESTOFN_RESUME_ENABLE:-1}
+BESTOFN_RESUME_PATH=${BESTOFN_RESUME_PATH:-}
 
 if [ -z "${CONFIG_PATH}" ]; then
   echo "CONFIG_PATH is required."
@@ -73,6 +77,8 @@ echo "Output: ${OUTPUT_JSON}"
 echo "Probe episodes: ${PROBE_EPISODES}"
 echo "Attack episodes: ${ATTACK_EPISODES}"
 echo "Skip adversarial: ${SKIP_ADVERSARIAL}"
+echo "Kirchner attack resume: ${KIRCHNER_ATTACK_RESUME_ENABLE} (dir=${KIRCHNER_ATTACK_RESUME_DIR:-auto})"
+echo "Best-of-n resume: ${BESTOFN_RESUME_ENABLE} (path=${BESTOFN_RESUME_PATH:-auto})"
 echo ""
 
 cd "${REPO_ROOT}" || exit 1
@@ -100,6 +106,12 @@ if [ "${KIRCHNER_ATTACK_ENABLE}" = "1" ]; then
     "--kirchner-success-incorrect-rate" "${KIRCHNER_SUCCESS_INCORRECT_RATE}"
     "--kirchner-success-score-gap-tol" "${KIRCHNER_SUCCESS_SCORE_GAP_TOL}"
   )
+  if [ "${KIRCHNER_ATTACK_RESUME_ENABLE}" = "1" ]; then
+    EXTRA_ARGS+=("--kirchner-attack-resume-enable")
+    if [ -n "${KIRCHNER_ATTACK_RESUME_DIR}" ]; then
+      EXTRA_ARGS+=("--kirchner-attack-resume-dir" "${KIRCHNER_ATTACK_RESUME_DIR}")
+    fi
+  fi
 fi
 if [ "${KIRCHNER_ATTACK_SUITE_ENABLE}" = "1" ]; then
   EXTRA_ARGS+=(
@@ -117,6 +129,12 @@ if [ "${KIRCHNER_ATTACK_SUITE_ENABLE}" = "1" ]; then
     "--kirchner-src-floor-reward" "${KIRCHNER_SRC_FLOOR_REWARD}"
     "--kirchner-attack-objectives" ${KIRCHNER_ATTACK_OBJECTIVES}
   )
+  if [ "${KIRCHNER_ATTACK_RESUME_ENABLE}" = "1" ]; then
+    EXTRA_ARGS+=("--kirchner-attack-resume-enable")
+    if [ -n "${KIRCHNER_ATTACK_RESUME_DIR}" ]; then
+      EXTRA_ARGS+=("--kirchner-attack-resume-dir" "${KIRCHNER_ATTACK_RESUME_DIR}")
+    fi
+  fi
 fi
 if [ "${BALANCED_BESTOFN_ENABLE}" = "1" ]; then
   EXTRA_ARGS+=(
@@ -128,6 +146,12 @@ if [ "${BALANCED_BESTOFN_ENABLE}" = "1" ]; then
     "--bestofn-helpful-temperature" "${BESTOFN_HELPFUL_TEMPERATURE}"
     "--bestofn-max-new-tokens" "${BESTOFN_MAX_NEW_TOKENS}"
   )
+  if [ "${BESTOFN_RESUME_ENABLE}" = "1" ]; then
+    EXTRA_ARGS+=("--bestofn-resume-enable")
+    if [ -n "${BESTOFN_RESUME_PATH}" ]; then
+      EXTRA_ARGS+=("--bestofn-resume-path" "${BESTOFN_RESUME_PATH}")
+    fi
+  fi
 fi
 
 # shellcheck disable=SC2086
