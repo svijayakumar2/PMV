@@ -144,6 +144,8 @@ def main(config_path: str = "configs/config.yaml"):
     latest_alias = Path(checkpoint_root) / f"{config_stem}_latest.pt"
     inflight_context_alias = Path(checkpoint_root) / f"{config_stem}_inflight_context.pt"
     inflight_state_alias = Path(checkpoint_root) / f"{config_stem}_inflight_state.pt"
+    prover_warmstart_alias = Path(checkpoint_root) / f"{config_stem}_prover_warmstart.pt"
+    prover_warm_start = bool(train_cfg.get("prover_warm_start", False))
     if save_checkpoints:
         run_ckpt_dir.mkdir(parents=True, exist_ok=True)
         Path(checkpoint_root).mkdir(parents=True, exist_ok=True)
@@ -390,11 +392,22 @@ def main(config_path: str = "configs/config.yaml"):
             print(f"Phase 1 complete. Oversight loss: {loss:.4f}")
             ensemble.freeze_all()
 
-        # Phase 2: Stackelberg (fresh prover, Algorithm 2)
+        # Phase 2: Stackelberg (prover init, Algorithm 2)
+        can_warm_start = (
+            prover_warm_start
+            and not is_resume_inflight_round
+            and prover_warmstart_alias.exists()
+        )
         if is_resume_inflight_round:
             print("\nRestoring prover from inflight checkpoint...")
+        elif can_warm_start:
+            print(
+                "\nWarm-starting prover from previous round "
+                "(prover_warm_start=true; accumulates adversarial knowledge across rounds)."
+            )
         else:
-            print("\nCreating fresh prover (reset per Section 6.3)...")
+            print("\nCreating fresh prover (cold start)...")
+
         prover = Prover(
             model_name=model_cfg["prover_model"],
             use_quantization=model_cfg.get("use_quantization", True),
@@ -404,6 +417,8 @@ def main(config_path: str = "configs/config.yaml"):
         )
         if is_resume_inflight_round:
             load_prover_checkpoint(str(inflight_state_alias), prover=prover, strict=False)
+        elif can_warm_start:
+            load_prover_checkpoint(str(prover_warmstart_alias), prover=prover, strict=False)
 
         use_reference_model = bool(train_cfg.get("use_reference_model", False))
         kl_coeff = float(train_cfg.get("kl_coeff", 0.1))
@@ -417,6 +432,12 @@ def main(config_path: str = "configs/config.yaml"):
                 lora_alpha=model_cfg.get("prover_lora_alpha", 16),
                 preferred_device=(reference_prover_device or prover_device),
             )
+            # When warm-starting, the KL reference should be the prover at the
+            # START of this round (i.e. same weights as the warm-started prover),
+            # so the penalty measures intra-round drift rather than total drift
+            # from the base model. This prevents KL from fighting accumulated learning.
+            if can_warm_start:
+                load_prover_checkpoint(str(prover_warmstart_alias), prover=base_prover, strict=False)
             base_prover.model.eval()
             for p in base_prover.model.parameters():
                 p.requires_grad = False
@@ -580,6 +601,13 @@ def main(config_path: str = "configs/config.yaml"):
             print(f"Saved checkpoint: {ckpt_path}")
             print(f"Updated latest checkpoint: {latest_alias}")
 
+        if prover_warm_start:
+            save_prover_checkpoint(
+                path=str(prover_warmstart_alias),
+                round_idx=round_idx,
+                prover=prover,
+                config_path=config_path,
+            )
         prover.delete()
         if base_prover is not None:
             base_prover.delete()

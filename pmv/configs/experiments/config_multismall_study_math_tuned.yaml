@@ -51,10 +51,10 @@ training:
   # bt_verifier_aux_lambda: enforce per-verifier ranking (not only aggregate ranking).
   bt_temperature: 4.0
   bt_hard_negative_pairs: true
-  bt_centering_lambda: 0.0
+  bt_centering_lambda: 0.01
   bt_margin: 0.08
   bt_margin_lambda: 0.5
-  bt_anchor_lambda: 0.05
+  bt_anchor_lambda: 0.15
   bt_target_correct: 0.8
   bt_target_incorrect: 0.2
   bt_verifier_aux_lambda: 0.2
@@ -110,18 +110,26 @@ training:
   helpful_warmup_max_length: 1024
   ppo_max_length: 1024
 
-  # Canonical role-alignment reward from the architecture.
+  # Affine role-alignment reward.
+  # Key structural requirement: β must dominate α so the prover is rewarded
+  # for specifically fooling the verifier (high f while wrong), not just for
+  # producing wrong answers. With α₁=0 and β₁ large, the sneaky prover's
+  # reward is purely the oversight score — it only wins by deceiving the verifier.
   reward_mode: "affine"
-  alpha_1: 2.0
-  beta_1: 1.0
-  alpha_2: -2.0
-  beta_2: -1.0
+  alpha_1: 0.0
+  beta_1: 4.0
+  alpha_2: -1.0
+  beta_2: -2.0
   sneaky_fool_threshold: 0.5
   supervised_single_identity: true
   # Multi-GPU verifier acceleration knobs.
   multi_gpu_verifier_parallel: true
   parallel_verifier_inference: true
   resume_from_checkpoint: true
+  # Warm-start the prover from the previous round instead of full reset.
+  # Allows the prover to accumulate adversarial knowledge across rounds.
+  # KL reference is automatically set to the warm-start weights (intra-round drift only).
+  prover_warm_start: true
 
   oversight_decision_threshold: 0.5
   verifier_decision_threshold: 0.5
