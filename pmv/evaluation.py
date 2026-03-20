@@ -973,6 +973,12 @@ def main():
         default=None,
         help="Checkpoint file for best-of-n resume state. Defaults to <output_stem>_bestofn_resume.pt.",
     )
+    parser.add_argument(
+        "--oversight-rule-override",
+        type=str,
+        default=None,
+        help="Override oversight_rule in the config (e.g. 'min', 'average') without editing the file.",
+    )
 
     args = parser.parse_args()
     random.seed(args.seed)
@@ -980,6 +986,9 @@ def main():
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
+    if args.oversight_rule_override:
+        config.setdefault("training", {})["oversight_rule"] = args.oversight_rule_override
+        print(f"Oversight rule overridden to: {args.oversight_rule_override}")
     model_cfg = config["model"]
     train_cfg = config.get("training", {})
     oversight_decision_threshold = float(
