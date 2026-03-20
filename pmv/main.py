@@ -340,6 +340,9 @@ def main(config_path: str = "configs/config.yaml"):
         print(f"{'='*80}")
         return
 
+    round_history: list = []
+    round_stats_path = output_dir / "round_stats.json"
+
     for round_idx in range(start_round, num_rounds + 1):
         if _job_runtime_exceeded():
             print(
@@ -465,6 +468,38 @@ def main(config_path: str = "configs/config.yaml"):
                 )
                 sneaky_total = sum(1 for rec in new_records if rec.role == "sneaky")
 
+                sneaky_incorrect = sum(
+                    1 for rec in new_records
+                    if rec.role == "sneaky" and rec.correctness == 0.0
+                )
+                mean_helpful_f = (
+                    sum(rec.oversight_score for rec in new_records
+                        if rec.role == "helpful" and rec.oversight_score is not None)
+                    / max(1, sum(1 for rec in new_records
+                                 if rec.role == "helpful" and rec.oversight_score is not None))
+                )
+                mean_sneaky_f = (
+                    sum(rec.oversight_score for rec in new_records
+                        if rec.role == "sneaky" and rec.oversight_score is not None)
+                    / max(1, sum(1 for rec in new_records
+                                 if rec.role == "sneaky" and rec.oversight_score is not None))
+                )
+                round_history.append({
+                    "round": round_idx,
+                    "phase1_loss": float(loss) if loss == loss else None,
+                    "helpful_correctness": helpful_correct / helpful_total if helpful_total > 0 else None,
+                    "helpful_correct": helpful_correct,
+                    "helpful_total": helpful_total,
+                    "sneaky_fool_rate": sneaky_fooled / sneaky_total if sneaky_total > 0 else None,
+                    "sneaky_incorrect_rate": sneaky_incorrect / sneaky_total if sneaky_total > 0 else None,
+                    "sneaky_fooled": sneaky_fooled,
+                    "sneaky_incorrect": sneaky_incorrect,
+                    "sneaky_total": sneaky_total,
+                    "mean_helpful_f": mean_helpful_f,
+                    "mean_sneaky_f": mean_sneaky_f,
+                    "mean_reward": avg_r,
+                })
+
                 print(f"Mean reward: {avg_r:.4f}")
                 if helpful_total > 0:
                     print(f"Helpful correctness: {helpful_correct}/{helpful_total}")
@@ -579,6 +614,11 @@ def main(config_path: str = "configs/config.yaml"):
             )
             print(f"Saved checkpoint: {ckpt_path}")
             print(f"Updated latest checkpoint: {latest_alias}")
+
+        if round_history:
+            with open(round_stats_path, "w") as _rsf:
+                json.dump(round_history, _rsf, indent=2)
+            print(f"Round stats saved: {round_stats_path}")
 
         prover.delete()
         if base_prover is not None:

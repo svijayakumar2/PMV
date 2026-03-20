@@ -317,6 +317,10 @@ def train_phase1(
     #      using Bradley-Terry on the frozen-aggregator output.
     # For supervised mode (current), the two phases collapse into this single function.
     """
+    oversight_rule = config.get("training", {}).get("oversight_rule", "supervised")
+    if oversight_rule == "pe_min" and ensemble.use_learned_aggregator:
+        return _train_pe_min_two_phase(ensemble, replay_buffer, config)
+
     if len(replay_buffer) < 10:
         return float("inf")
 
@@ -454,6 +458,153 @@ def train_phase1(
             avg = epoch_loss / n_updates
             print(f"  Epoch {epoch+1}/{epochs}, BT loss: {avg:.4f}")
             final_loss = avg
+
+    ensemble.freeze_all()
+    return final_loss
+
+
+def _train_pe_min_two_phase(
+    ensemble: VerifierEnsemble,
+    replay_buffer: ReplayBuffer,
+    config: Dict,
+) -> float:
+    """
+    Proper two-phase PE-Min training (Algorithm 1, Kirchner et al.):
+
+    Phase 1a — train aggregator f with H_PE-min loss, verifiers frozen:
+        min_f  E[ min_j BCE(f(x,y), z_j(x,y)) ]
+        f is reset to fresh weights each round; z_j are treated as targets.
+
+    Phase 1b — train verifiers with BT on frozen aggregator:
+        min_φ  E[ -log σ(τ · (f(x,y+) - f(x,y-))) ]
+        Gradient flows through the frozen aggregator function to verifier params.
+    """
+    if len(replay_buffer) < 10:
+        return float("inf")
+
+    train_cfg = config["training"]
+    lr = float(train_cfg.get("verifier_lr", 1e-4))
+    agg_lr = float(train_cfg.get("pe_min_agg_lr", lr))
+    epochs = int(train_cfg.get("verifier_epochs", 3))
+    bt_temperature = float(train_cfg.get("bt_temperature", 4.0))
+    bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 8)))
+    bt_hard_negative_pairs = bool(train_cfg.get("bt_hard_negative_pairs", True))
+    bt_accumulate_steps = max(1, int(train_cfg.get("bt_accumulate_steps", 8)))
+    agg_device = ensemble.aggregator_device
+    records = replay_buffer.get_all()
+
+    # ── Phase 1a: reset + train aggregator with H_PE-min ────────────────────
+    print(f"\n{'─'*60}")
+    print(f"PHASE 1a: PE-Min aggregator training (verifiers frozen)")
+    print(f"  {len(records)} buffer records, agg_lr={agg_lr}")
+    print(f"{'─'*60}")
+
+    ensemble.freeze_all()
+    ensemble.reset_aggregator()
+    ensemble.aggregator.unfreeze()
+
+    agg_optimizer = torch.optim.AdamW(
+        [p for p in ensemble.aggregator.parameters() if p.requires_grad],
+        lr=agg_lr, weight_decay=0.01,
+    )
+
+    for epoch in range(epochs):
+        random.shuffle(records)
+        epoch_loss, n = 0.0, 0
+        for rec in records:
+            try:
+                with torch.no_grad():
+                    raw_scores = []
+                    for v in ensemble.verifiers:
+                        s = v.compute_score(rec.problem, rec.response, transcript="", training=False)
+                        raw_scores.append(float(s.item()))
+                scores_t = torch.tensor(raw_scores, dtype=torch.float32, device=agg_device)
+                f = ensemble.aggregator(scores_t)  # scalar
+                # H_PE-min: min_j BCE(f, z_j)
+                f_exp = f.unsqueeze(0).expand(len(raw_scores))
+                f_clamped = f_exp.clamp(1e-6, 1 - 1e-6)
+                per_v = F.binary_cross_entropy(f_clamped, scores_t, reduction="none")
+                loss = per_v.min()
+                if torch.isnan(loss) or torch.isinf(loss):
+                    continue
+                agg_optimizer.zero_grad()
+                loss.backward()
+                agg_optimizer.step()
+                epoch_loss += loss.item()
+                n += 1
+            except Exception:
+                continue
+        avg = epoch_loss / max(1, n)
+        print(f"  Agg epoch {epoch+1}/{epochs}, H_PE-min loss: {avg:.4f}")
+
+    # Freeze aggregator before Phase 1b
+    ensemble.aggregator.freeze()
+
+    # ── Phase 1b: train verifiers with BT on frozen aggregator ───────────────
+    print(f"\n{'─'*60}")
+    print(f"PHASE 1b: Verifier BT training (aggregator frozen)")
+    pairs = _build_bt_pairs(
+        records,
+        max_pairs_per_problem=bt_max_pairs_per_problem,
+        prioritize_hard_negatives=bt_hard_negative_pairs,
+    )
+    print(f"  {len(pairs)} same-problem pairs from {len(records)} buffer records "
+          f"(τ={bt_temperature})")
+    print(f"{'─'*60}")
+
+    if not pairs:
+        print("  No pairs found; skipping Phase 1b.")
+        ensemble.freeze_all()
+        return float("inf")
+
+    for v in ensemble.verifiers:
+        v.unfreeze()
+
+    all_verifier_params = []
+    for v in ensemble.verifiers:
+        all_verifier_params.extend(v.get_trainable_params())
+
+    optimizer = torch.optim.AdamW(all_verifier_params, lr=lr, weight_decay=0.01)
+    final_loss = float("inf")
+
+    for epoch in range(epochs):
+        random.shuffle(pairs)
+        epoch_loss, n_updates = 0.0, 0
+        accum_loss = torch.tensor(0.0, device=agg_device)
+        accum_valid = 0
+        optimizer.zero_grad()
+
+        for pair_idx, (c_rec, i_rec) in enumerate(pairs):
+            try:
+                # Gradient flows: verifier params → scores → frozen aggregator fn → f
+                _, f_correct = ensemble.compute_oversight_score_training(
+                    c_rec.problem, c_rec.response, ""
+                )
+                _, f_incorrect = ensemble.compute_oversight_score_training(
+                    i_rec.problem, i_rec.response, ""
+                )
+                bt_loss = -F.logsigmoid(bt_temperature * (f_correct - f_incorrect))
+                loss = bt_loss / bt_accumulate_steps
+                if torch.isnan(loss) or torch.isinf(loss):
+                    continue
+                loss.backward()
+                accum_loss = accum_loss + loss.detach()
+                accum_valid += 1
+            except Exception:
+                continue
+
+            if (pair_idx + 1) % bt_accumulate_steps == 0 or (pair_idx + 1) == len(pairs):
+                if accum_valid > 0:
+                    torch.nn.utils.clip_grad_norm_(all_verifier_params, max_norm=1.0)
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    epoch_loss += float(accum_loss.item()) * bt_accumulate_steps
+                    n_updates += 1
+                accum_loss = torch.tensor(0.0, device=agg_device)
+                accum_valid = 0
+
+        final_loss = epoch_loss / max(1, n_updates)
+        print(f"  BT epoch {epoch+1}/{epochs}, loss: {final_loss:.4f}")
 
     ensemble.freeze_all()
     return final_loss

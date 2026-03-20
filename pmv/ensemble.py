@@ -263,6 +263,19 @@ class VerifierEnsemble:
             params.extend(p for p in self.aggregator.parameters() if p.requires_grad)
         return params
 
+    def reset_aggregator(self):
+        """Reinitialize aggregator MLP to fresh random weights (called before Phase 1a)."""
+        if self.aggregator is None:
+            return
+        model_cfg = self.config["model"]
+        fresh = OversightAggregator(
+            num_verifiers=self.num_verifiers,
+            hidden_dim=model_cfg.get("aggregator_hidden_dim", 64),
+            device=self.aggregator_device,
+        )
+        self.aggregator.network.load_state_dict(fresh.network.state_dict())
+        print("  Aggregator reset to fresh weights.")
+
     # ---- checkpointing ---------------------------------------------------
 
     def state_dict_checkpoint(self) -> Dict:
