@@ -341,7 +341,7 @@ def main(config_path: str = "configs/config.yaml"):
         return
 
     round_history: list = []
-    round_stats_path = output_dir / "round_stats.json"
+    round_stats_path = run_ckpt_dir / "round_stats.json"
 
     for round_idx in range(start_round, num_rounds + 1):
         if _job_runtime_exceeded():
