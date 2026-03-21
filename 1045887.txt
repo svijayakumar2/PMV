@@ -1,0 +1,179 @@
+Job started at: Fri Mar 20 04:07:51 PM EDT 2026
+Host: cccxc591
+Job ID: 1045887
+Variants: multi_small_3b_pemin:3:pe_min:small
+Rounds total: 5
+Rounds this run: 0
+Bootstrap: 100
+Oracle bootstrap: 100
+Collect episodes: 120
+Warmup steps: 80
+PPO target updates/round: 8000
+PPO early stop enable: 1
+PPO early stop mode: loss
+Collect early stop enable: 0
+Prover distributed PPO: 1
+Max job runtime seconds: 13000
+2GPU accel enabled: 1
+Output dir: results/studies/multi_small_math_tuned/multi3b_pemin_r5_v3
+
+
+========================================================================================
+VARIANT multi_small_3b_pemin: n=3, rule=pe_min, prover=Qwen/Qwen2.5-3B-Instruct, verifier=Qwen/Qwen2.5-3B-Instruct
+========================================================================================
+RUN: python3 -u -m pmv.main results/studies/multi_small_math_tuned/multi3b_pemin_r5_v3/config_multi_small_3b_pemin.yaml
+================================================================================
+PMV GAME - Prover Multi-Verifier
+================================================================================
+Seed: 0
+Oversight rule: pe_min
+Device plan: prover=cuda:0, reference=cuda:1
+Checkpoint dir: results/studies/multi_small_math_tuned/multi3b_pemin_r5_v3/checkpoints/config_multi_small_3b_pemin_1045887
+  Verifier devices: ['cuda:0', 'cuda:1', 'cuda:0']
+  Parallel verifier inference is enabled.
+
+Creating verifiers (persist across rounds)...
+  Creating verifier 0 (logical_structure)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 0 (logical_structure)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+  Creating verifier 1 (computational_accuracy)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 1 (computational_accuracy)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+  Creating verifier 2 (problem_alignment)
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+[Verifier 2 (problem_alignment)] Trainable parameters:
+trainable params: 3,686,400 || all params: 3,089,625,088 || trainable%: 0.1193
+
+============================================================
+BOOTSTRAP PHASE (Round 0)
+============================================================
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Helpful warmup schedule: bootstrap=80 steps, per-round=0 steps
+
+Generating 100 bootstrap solutions...
+Helpful warmup: 80 steps (batch=4, lr=2e-05)
+Downloading OpenMathInstruct-2 dataset...
+Filtering for MATH problems...
+Using 14704 samples
+Train: 13234, Test: 1470
+  Warmup step 10/80, loss: 4.2203
+  Warmup step 20/80, loss: 1.8122
+  Warmup step 30/80, loss: 1.3487
+  Warmup step 40/80, loss: 0.8696
+  Warmup step 50/80, loss: 1.7362
+  Warmup step 60/80, loss: 0.6058
+  Warmup step 70/80, loss: 1.4133
+  Warmup step 80/80, loss: 0.8140
+Helpful warmup complete. Updates: 79/80
+  Bootstrap 20/100
+  Bootstrap 40/100
+  Bootstrap 60/100
+  Bootstrap 80/100
+  Bootstrap 100/100
+Adding 100 oracle-correct bootstrap records...
+  Oracle bootstrap 60/100
+  Oracle bootstrap 80/100
+  Oracle bootstrap 100/100
+Oracle bootstrap added: 75/100
+
+Bootstrap complete. Buffer size: 175
+
+================================================================================
+MAIN TRAINING: 5 rounds
+================================================================================
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc591>
+Subject: Job 1045887: <pmv_pemin_3b_v3> in cluster <CCC2_LSF> Exited
+
+Job <pmv_pemin_3b_v3> was submitted from host <ccc-login3> by user <saranyaibm2> in cluster <CCC2_LSF> at Fri Mar 20 16:07:48 2026
+Job was executed on host(s) <cccxc591>, in queue <normal>, as user <saranyaibm2> in cluster <CCC2_LSF> at Fri Mar 20 16:07:49 2026
+</u/saranyaibm2> was used as the home directory.
+</dccstor/principled_ai/users/saranyaibm2/PMV> was used as the working directory.
+Started at Fri Mar 20 16:07:49 2026
+Terminated at Fri Mar 20 16:14:05 2026
+Results reported at Fri Mar 20 16:14:05 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -J pmv_multismall_math_roundtrain_2gpu_ddp
+#BSUB -q normal
+#BSUB -gpu "num=2:mode=shared:gmodel=NVIDIAA100_SXM4_80GB"
+#BSUB -M 128GB
+#BSUB -R "rusage[mem=128GB]"
+#BSUB -o /u/saranyaibm2/.lsbatch/%J.out
+#BSUB -e /u/saranyaibm2/.lsbatch/%J.err
+#BSUB -W 48:00
+
+set -euo pipefail
+
+export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
+export TRANSFORMERS_CACHE="$HF_HOME"
+export HF_DATASETS_CACHE="$HF_HOME"
+export PYTHONFAULTHANDLER=1
+
+REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
+BASE_CONFIG=${BASE_CONFIG:-pmv/configs/experiments/config_multismall_study_math_tuned.yaml}
+PROVER_MODEL=${PROVER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+SMALL_VERIFIER_MODEL=${SMALL_VERIFIER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+LARGE_VERIFIER_MODEL=${LARGE_VERIFIER_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+VARIANTS=${VARIANTS:-multi_small_3b_specialized:3:supervised:small}
+
+TRAIN_ROUNDS=${TRAIN_ROUNDS:-5}
+MAX_ROUNDS_THIS_RUN=${MAX_ROUNDS_THIS_RUN:-0}
+BOOTSTRAP_EPISODES=${BOOTSTRAP_EPISODES:-100}
+BOOTSTRAP_ORACLE_EPISODES=${BOOTSTRAP_ORACLE_EPISODES:-100}
+COLLECT_EPISODES=${COLLECT_EPISODES:-120}
+HELPFUL_WARMUP_STEPS=${HELPFUL_WARMUP_STEPS:-80}
+PPO_TARGET_UPDATES_PER_ROUND=${PPO_TARGET_UPDATES_PER_ROUND:-8000}
+PPO_EARLY_STOP_ENABLE=${PPO_EARLY_STOP_ENABLE:-1}
+PPO_EARLY_STOP_MODE=${PPO_EARLY_STOP_MODE:-loss}
+COLLECT_EARLY_STOP_ENABLE=${COLLECT_EARLY_STOP_ENABLE:-0}
+PROVER_DISTRIBUTED_PPO=${PROVER_DISTRIBUTED_PPO:-1}
+MAX_JOB_RUNTIME_SECONDS=${MAX_JOB_RUNTIME_SECONDS:-13000}
+ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-1}
+SEED=${SEED:-0}
+
+RUN_NAME=${RUN_NAME:-math_roundtrain_2gpu_ddp}
+OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_NAME}}
+
+echo "Job started at: $(date)"
+echo "Host: $(hostname)"
+echo "Job ID: ${LSB_JOBID:-local}"
+echo "Variants: ${VARIANTS}"
+echo "Rounds total: ${TRAIN_ROUNDS}"
+echo "Rounds this run: ${MAX_ROUNDS_THIS_RUN}"
+echo "Bootstrap: ${BOOTSTRAP_EPISODES}"
+echo "Oracle bootstrap: ${BOOTSTRAP_ORACLE_EPISODES}"
+
+(... more ...)
+------------------------------------------------------------
+
+Exited with exit code 1.
+
+Resource usage summary:
+
+    CPU time :                                   354.16 sec.
+    Max Memory :                                 3 GB
+    Average Memory :                             2.61 GB
+    Total Requested Memory :                     128.00 GB
+    Delta Memory :                               125.00 GB
+    Max Swap :                                   -
+    Max Processes :                              38
+    Max Threads :                                211
+    Run time :                                   381 sec.
+    Turnaround time :                            377 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file </u/saranyaibm2/.lsbatch/1045887.err> for stderr output of this job.
+
