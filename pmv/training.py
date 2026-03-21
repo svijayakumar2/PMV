@@ -513,10 +513,15 @@ def _train_pe_min_two_phase(
         epoch_loss, n = 0.0, 0
         for rec in records:
             try:
+                # Use head-based scoring (fast, differentiable-aligned) NOT generation-based.
+                # use_head=True returns sigmoid(score_head(hidden)) without grad.
                 with torch.no_grad():
                     raw_scores = []
                     for v in ensemble.verifiers:
-                        s = v.compute_score(rec.problem, rec.response, transcript="", training=False)
+                        s = v.compute_score(
+                            rec.problem, rec.response, transcript="",
+                            training=False, use_head=True,
+                        )
                         raw_scores.append(float(s.item()))
                 scores_t = torch.tensor(raw_scores, dtype=torch.float32, device=agg_device)
                 f = ensemble.aggregator(scores_t)  # scalar
@@ -532,7 +537,8 @@ def _train_pe_min_two_phase(
                 agg_optimizer.step()
                 epoch_loss += loss.item()
                 n += 1
-            except Exception:
+            except Exception as e:
+                print(f"  [Phase 1a] record error: {e}")
                 continue
         avg = epoch_loss / max(1, n)
         print(f"  Agg epoch {epoch+1}/{epochs}, H_PE-min loss: {avg:.4f}")
@@ -590,7 +596,8 @@ def _train_pe_min_two_phase(
                 loss.backward()
                 accum_loss = accum_loss + loss.detach()
                 accum_valid += 1
-            except Exception:
+            except Exception as e:
+                print(f"  [Phase 1b] pair error: {e}")
                 continue
 
             if (pair_idx + 1) % bt_accumulate_steps == 0 or (pair_idx + 1) == len(pairs):
