@@ -240,6 +240,20 @@ def main(config_path: str = "configs/config.yaml"):
             return False
         return (time.time() - run_start_time) >= max_job_runtime_seconds
 
+    if not resumed:
+        pretrain_ckpt = train_cfg.get("pretrain_from_checkpoint")
+        if pretrain_ckpt:
+            pretrain_path = Path(pretrain_ckpt)
+            if pretrain_path.exists():
+                print(f"\nPre-loading verifier/aggregator weights from: {pretrain_ckpt}")
+                try:
+                    load_checkpoint(str(pretrain_path), ensemble=ensemble, strict=False)
+                    print("  Pre-load successful.")
+                except Exception as e:
+                    print(f"  Pre-load failed (continuing with fresh weights): {e}")
+            else:
+                print(f"\nWARNING: pretrain_from_checkpoint not found: {pretrain_ckpt}")
+
     if resumed:
         print(
             f"\nSkipping bootstrap due to resume. Restored buffer size: {len(replay_buffer)}"

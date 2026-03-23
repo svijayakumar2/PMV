@@ -485,7 +485,7 @@ def _train_pe_min_two_phase(
     train_cfg = config["training"]
     lr = float(train_cfg.get("verifier_lr", 1e-4))
     agg_lr = float(train_cfg.get("pe_min_agg_lr", lr))
-    epochs = int(train_cfg.get("verifier_epochs", 3))
+    epochs = int(train_cfg.get("pe_min_verifier_epochs", train_cfg.get("verifier_epochs", 3)))
     bt_temperature = float(train_cfg.get("bt_temperature", 4.0))
     bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 8)))
     bt_hard_negative_pairs = bool(train_cfg.get("bt_hard_negative_pairs", True))
@@ -499,8 +499,10 @@ def _train_pe_min_two_phase(
     print(f"  {len(records)} buffer records, agg_lr={agg_lr}")
     print(f"{'─'*60}")
 
+    pe_min_reset_aggregator = bool(train_cfg.get("pe_min_reset_aggregator", False))
     ensemble.freeze_all()
-    ensemble.reset_aggregator()
+    if pe_min_reset_aggregator:
+        ensemble.reset_aggregator()
     ensemble.aggregator.unfreeze()
 
     agg_optimizer = torch.optim.AdamW(
