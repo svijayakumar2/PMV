@@ -1314,10 +1314,21 @@ def main():
     cond_fool_k = next((k for k in probe["rates"] if k.startswith("sneaky_conditional_fool_rate@")), None)
     if cond_fool_k:
         print(f"  {cond_fool_k}: {probe['rates'][cond_fool_k]:.3f}")
+    avg_c = oversight_quality.get("avg_correct_score")
+    avg_i = oversight_quality.get("avg_incorrect_score")
+    if avg_c is not None:
+        print(f"  Avg score (correct): {avg_c:.3f}")
+    if avg_i is not None:
+        print(f"  Avg score (incorrect): {avg_i:.3f}")
     if oversight_quality.get("separation") is None:
         print("  Oversight separation: undefined (no correct or no incorrect samples in probe set)")
     else:
-        print(f"  Oversight separation: {oversight_quality['separation']:.3f}")
+        sep = oversight_quality["separation"]
+        print(f"  Oversight separation: {sep:.3f}")
+        if avg_c is not None and avg_c < 0.4 and avg_i is not None and avg_i < 0.4:
+            print("  *** SCORE COLLAPSE WARNING: both correct and incorrect scores are below 0.4."
+                  " Fool rate results are not meaningful — verifier may reject everything. ***")
+    print(f"  Approx soundness (P(f<=0.1|incorrect)): {oversight_quality.get('approx_soundness_eps_0.1', 'N/A')}")
     print(
         f"  Probe label coverage: correct={oversight_quality.get('n_correct', 0)}, "
         f"incorrect={oversight_quality.get('n_incorrect', 0)}"
