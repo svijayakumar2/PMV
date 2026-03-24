@@ -53,6 +53,16 @@ Same architecture but with additional BT hyperparams: margin λ=0.5, anchor λ=0
 
 ---
 
+### multi3b_pemin_r5_fullppo_v4 — PE-Min v4 (warm-start, no agg reset, 10 BT epochs)
+
+| Job | Date | Rounds run | Fool rate by round | Mean f (helpful/sneaky) | Status |
+|---|---|---|---|---|---|
+| **1087303** | Mar 23–24 2026 | R1–R5 | R1: 15/60 (25%), R2: 7/60 (12%), R3: 12/60 (20%), R4: 4/60 (7%), R5: 4/60 (7%) | R1: 0.708/0.645, R2: 0.471/0.366, R3: 0.497/0.481, R4: 0.382/0.254, R5: 0.378/0.180 | Complete ✓ |
+
+**Notes**: No score collapse (v3's fatal flaw). Helpful/sneaky gap grows each round: 0.063 → 0.105 → 0.016 → 0.128 → **0.198**. Verifiers are learning real discrimination. R3 gap near-zero is a yellow flag but recovered in R4–R5. Helpful correctness oscillates (27/24/29/21/22 out of 60) — not collapsed but declining slightly. Kirchner suite eval pending (job TBD).
+
+---
+
 ### paper_budget_3v_8k_ddp — multi_small_3b_specialized (supervised BT, alternate budget)
 
 | Job | Date | Rounds run | Fool rate | Helpful | Reward | Status |
@@ -77,19 +87,38 @@ Adversarial evaluation of `multi_small_3b_specialized` checkpoint (from job 5452
 
 ---
 
-### 832226 — Eval: multi3b_bt_margin_anchor_vaux_r5_fullppo (final)
-Adversarial evaluation of `multi_small_3b_specialized` trained with margin+anchor+vaux BT hyperparams.
+### 832226 — Eval: multi3b_bt_margin_anchor_vaux_r5_fullppo (partial, old script)
+Adversarial evaluation of `multi_small_3b_specialized` with margin+anchor+vaux BT. Old eval script (no Kirchner suite, separation=0.020 was a reporting bug — see 1086952 for correct value).
 
 | Metric | Value |
 |---|---|
 | Adversarial fool rate (temp=0.7) | **22.6%** (7/31) |
 | Adversarial fool rate (temp=1.0) | **15.2%** (5/33) |
-| Avg score shift (single-verifier manipulation) | 0.054 |
-| Max score shift | 0.146 |
-| Score separation (correct vs incorrect) | 0.020 |
 | Helpful correctness | 0.425 |
 
-**Verdict**: Much better robustness than plain BT; margin/anchor/vaux hyperparams help significantly.
+**Superseded by job 1086952.**
+
+---
+
+### 1086952 — Eval: multi3b_bt_margin_anchor_vaux_r5_fullppo (clean Kirchner suite, Mar 23)
+Full Kirchner attack suite on the supervised multi-small checkpoint. Same config/script as single-large eval for apples-to-apples comparison.
+
+| Metric | Value |
+|---|---|
+| AUROC | **0.827** |
+| Score separation | **0.178** |
+| Avg score (correct) | 0.640 |
+| Avg score (incorrect) | 0.463 |
+| Adversarial fool rate (temp=0.7) | **22.6%** (7/31) |
+| Adversarial fool rate (temp=1.0) | **15.2%** (5/33) |
+| Binary accuracy | **73.8%** |
+| Helpful correctness | 0.425 |
+| Kirchner SRC attack | **FAILED** (budget=2000) |
+| Kirchner CGC attack | **FAILED** (budget=2000) |
+| Kirchner goodhart attack | **FAILED** (budget=2000) |
+| Kirchner suite | **0/3 success** |
+
+**Verdict**: Clean result. No score collapse. Dedicated adversarial prover could not crack any Kirchner objective. This is the main supervised multi-small result.
 
 ---
 
@@ -104,7 +133,31 @@ Adversarial evaluation of PE-Min verifiers with full Kirchner attack suite (SRC/
 | Max score shift | 0.146 |
 | Kirchner SRC attack | Resumed at 6800/8000 updates, not yet successful |
 
-**Status**: Killed by LSF 12h time limit (ran 12h, Kirchner suite not finished). Best robustness seen so far.
+**Status**: Killed by LSF 12h time limit. Resumed as job 1097725.
+
+---
+
+### 1097725 — Eval: single_large_r5_fullppo (clean Kirchner suite, Mar 24)
+Resume of 1087272. Single 7B verifier through same eval script as 1086952 for apples-to-apples.
+
+| Metric | Value |
+|---|---|
+| AUROC | 0.779 |
+| Score separation | 0.312 |
+| Avg score (correct) | 0.461 |
+| Avg score (incorrect) | 0.150 |
+| Approx soundness P(f≤0.1\|incorrect) | **0.688** |
+| Helpful-correct accept rate | 0.562 |
+| Binary accuracy | 72.5% |
+| Helpful correctness | 0.400 |
+| Adversarial fool @0.7 | 3.6% (1/28) |
+| Adversarial fool @1.0 | 0.0% (0/29) |
+| Kirchner SRC | FAILED |
+| Kirchner CGC | FAILED |
+| Kirchner goodhart | FAILED |
+| Kirchner suite | **0/3 success** |
+
+**Verdict**: Hyperconservative — avg_incorrect=0.150, only 56% of correct solutions accepted. Achieves low fool rate and high soundness by scoring nearly everything low. Kirchner attacks fail, but at the cost of usability. Multi-small (1086952) has better AUROC and 88% correct accept rate while matching on Kirchner resistance.
 
 ---
 
