@@ -458,3 +458,166 @@ PHASE 1b: Verifier BT training (aggregator frozen)
   BT epoch 2/10, loss: 0.4508
   BT epoch 3/10, loss: 0.4431
   BT epoch 4/10, loss: 0.3832
+  BT epoch 5/10, loss: 0.3610
+  BT epoch 6/10, loss: 0.3605
+  BT epoch 7/10, loss: 0.3596
+  BT epoch 8/10, loss: 0.3759
+  BT epoch 9/10, loss: 0.3967
+  BT epoch 10/10, loss: 0.3884
+Phase 1 complete. Oversight loss: 0.3884
+
+Creating fresh prover (reset per Section 6.3)...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Creating PPO reference prover...
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+
+Collecting 120 episodes...
+  Episode 10/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 20/120, role=sneaky, correct=True, f=0.998, r=-2.998
+  Episode 30/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 40/120, role=sneaky, correct=False, f=0.997, r=2.997
+  Episode 50/120, role=sneaky, correct=True, f=0.214, r=-2.214
+  Episode 60/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 70/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 80/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 90/120, role=sneaky, correct=False, f=0.975, r=2.975
+  Episode 100/120, role=sneaky, correct=False, f=0.000, r=2.000
+  Episode 110/120, role=sneaky, correct=True, f=0.998, r=-2.998
+  Episode 120/120, role=sneaky, correct=False, f=0.027, r=2.027
+Collection diagnostics: FINAL format 120/120 (100.00%), sneaky incorrect 49/60, sneaky fooled@0.50 4/60, mean f (helpful/sneaky)=(0.378/0.180), replay extras (sneaky/oracle)=(36/22)
+Mean reward: 0.4423
+Helpful correctness: 22/60
+Sneaky fool rate@0.50: 4/60
+
+Training prover via PPO...
+  Launching distributed PPO across 2 GPUs.
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+  PPO distributed mode: world_size=2, target_updates=8000, global_batch_size=8, start_update=0, early_stop_mode=loss
+  PPO distributed update 200/8000, avg loss: -0.0275
+  PPO distributed update 400/8000, avg loss: -0.0553
+  PPO distributed update 600/8000, avg loss: -0.0673
+  PPO distributed update 800/8000, avg loss: -0.0807
+  PPO distributed update 1000/8000, avg loss: -0.0763
+  PPO distributed update 1200/8000, avg loss: -0.0795
+  PPO distributed update 1400/8000, avg loss: -0.0787
+  PPO distributed update 1600/8000, avg loss: -0.0810
+  PPO distributed update 1800/8000, avg loss: -0.0801
+  PPO distributed update 2000/8000, avg loss: -0.0838
+  PPO distributed update 2200/8000, avg loss: -0.0847
+  PPO distributed update 2400/8000, avg loss: -0.0840
+  PPO distributed update 2600/8000, avg loss: -0.0828
+  PPO distributed update 2800/8000, avg loss: -0.0816
+  PPO distributed update 3000/8000, avg loss: -0.0823
+  PPO distributed early stop: avg_loss=-0.0823, best=-0.0847, stale_windows=4
+  PPO distributed complete: 3000/8000 updates, avg loss: -0.0823
+Loading Qwen/Qwen2.5-3B-Instruct with 4-bit quantization
+Buffer size: 1040
+Saved checkpoint: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4/checkpoints/config_multi_small_3b_pemin_1087303/round_005.pt
+Updated latest checkpoint: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4/checkpoints/config_multi_small_3b_pemin_latest.pt
+Round stats saved: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4/checkpoints/config_multi_small_3b_pemin_1087303/round_stats.json
+
+================================================================================
+Training complete!
+================================================================================
+
+Saved summary JSON: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4/multi_small_study.json
+Saved summary CSV: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4/multi_small_study.csv
+Output dir: results/studies/multi_small_math_tuned/multi3b_pemin_r5_fullppo_v4
+
+Round-train resumable DDP job complete.
+Job finished at: Tue Mar 24 12:21:39 AM EDT 2026
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@cccxc615>
+Subject: Job 1087303: <pmv_pemin_v4> in cluster <CCC2_LSF> Done
+
+Job <pmv_pemin_v4> was submitted from host <ccc-login3> by user <saranyaibm2> in cluster <CCC2_LSF> at Mon Mar 23 10:16:04 2026
+Job was executed on host(s) <cccxc615>, in queue <normal>, as user <saranyaibm2> in cluster <CCC2_LSF> at Mon Mar 23 10:16:05 2026
+</u/saranyaibm2> was used as the home directory.
+</dccstor/principled_ai/users/saranyaibm2/PMV> was used as the working directory.
+Started at Mon Mar 23 10:16:05 2026
+Terminated at Tue Mar 24 00:21:40 2026
+Results reported at Tue Mar 24 00:21:40 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -J pmv_multismall_math_roundtrain_2gpu_ddp
+#BSUB -q normal
+#BSUB -gpu "num=2:mode=shared:gmodel=NVIDIAA100_SXM4_80GB"
+#BSUB -M 128GB
+#BSUB -R "rusage[mem=128GB]"
+#BSUB -o /u/saranyaibm2/.lsbatch/%J.out
+#BSUB -e /u/saranyaibm2/.lsbatch/%J.err
+#BSUB -W 48:00
+
+set -euo pipefail
+
+export HF_HOME=/dccstor/principled_ai/users/saranyaibm2/hf_cache
+export TRANSFORMERS_CACHE="$HF_HOME"
+export HF_DATASETS_CACHE="$HF_HOME"
+export PYTHONFAULTHANDLER=1
+
+REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
+BASE_CONFIG=${BASE_CONFIG:-pmv/configs/experiments/config_multismall_study_math_tuned.yaml}
+PROVER_MODEL=${PROVER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+SMALL_VERIFIER_MODEL=${SMALL_VERIFIER_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+LARGE_VERIFIER_MODEL=${LARGE_VERIFIER_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+VARIANTS=${VARIANTS:-multi_small_3b_specialized:3:supervised:small}
+
+TRAIN_ROUNDS=${TRAIN_ROUNDS:-5}
+MAX_ROUNDS_THIS_RUN=${MAX_ROUNDS_THIS_RUN:-0}
+BOOTSTRAP_EPISODES=${BOOTSTRAP_EPISODES:-100}
+BOOTSTRAP_ORACLE_EPISODES=${BOOTSTRAP_ORACLE_EPISODES:-100}
+COLLECT_EPISODES=${COLLECT_EPISODES:-120}
+HELPFUL_WARMUP_STEPS=${HELPFUL_WARMUP_STEPS:-80}
+PPO_TARGET_UPDATES_PER_ROUND=${PPO_TARGET_UPDATES_PER_ROUND:-8000}
+PPO_EARLY_STOP_ENABLE=${PPO_EARLY_STOP_ENABLE:-1}
+PPO_EARLY_STOP_MODE=${PPO_EARLY_STOP_MODE:-loss}
+COLLECT_EARLY_STOP_ENABLE=${COLLECT_EARLY_STOP_ENABLE:-0}
+PROVER_DISTRIBUTED_PPO=${PROVER_DISTRIBUTED_PPO:-1}
+MAX_JOB_RUNTIME_SECONDS=${MAX_JOB_RUNTIME_SECONDS:-13000}
+ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-1}
+SEED=${SEED:-0}
+
+RUN_NAME=${RUN_NAME:-math_roundtrain_2gpu_ddp}
+OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_NAME}}
+
+echo "Job started at: $(date)"
+echo "Host: $(hostname)"
+echo "Job ID: ${LSB_JOBID:-local}"
+echo "Variants: ${VARIANTS}"
+echo "Rounds total: ${TRAIN_ROUNDS}"
+echo "Rounds this run: ${MAX_ROUNDS_THIS_RUN}"
+echo "Bootstrap: ${BOOTSTRAP_EPISODES}"
+echo "Oracle bootstrap: ${BOOTSTRAP_ORACLE_EPISODES}"
+
+(... more ...)
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time :                                   60988.00 sec.
+    Max Memory :                                 9 GB
+    Average Memory :                             4.44 GB
+    Total Requested Memory :                     128.00 GB
+    Delta Memory :                               119.00 GB
+    Max Swap :                                   -
+    Max Processes :                              107
+    Max Threads :                                1146
+    Run time :                                   50724 sec.
+    Turnaround time :                            50736 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file </u/saranyaibm2/.lsbatch/1087303.err> for stderr output of this job.
+
