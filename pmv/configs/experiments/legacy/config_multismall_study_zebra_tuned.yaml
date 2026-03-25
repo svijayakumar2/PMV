@@ -1,0 +1,106 @@
+# Zebra Logic config with modern BT hyperparameters (margin + anchor + vaux).
+# Matches math_tuned setup as closely as possible; zebra-specific adjustments:
+# smaller episodes, shorter sequences, 4*4 max puzzle size.
+
+model:
+  prover_model: "Qwen/Qwen2.5-3B-Instruct"
+  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  num_verifiers: 1
+  use_quantization: true
+  prover_lora_r: 8
+  prover_lora_alpha: 16
+  verifier_lora_r: 8
+  verifier_lora_alpha: 16
+  aggregator_hidden_dim: 64
+
+dataset:
+  type: zebra
+  max_size: "4*4"
+
+training:
+  oversight_rule: "supervised"
+  seed: 0
+  mu_0: 0.75
+
+  rounds: 5
+  bootstrap_episodes: 60
+  bootstrap_oracle_episodes: 60
+  collect_episodes: 80
+  max_buffer_size: 5000
+  helpful_warmup_steps: 80
+  round_helpful_warmup_steps: 0
+
+  verifier_lr: 1.0e-4
+  verifier_epochs: 3
+  verifier_batch_size: 8
+  verifier_max_length: 768
+  auto_adjust_verifier_max_length: true
+  verifier_prompt_margin: 256
+  verifier_dropout: 0.0
+  softmin_beta: 5.0
+  single_verifier_role: "computational_accuracy"
+  bt_temperature: 4.0
+  bt_hard_negative_pairs: true
+  bt_centering_lambda: 0.0
+  bt_margin: 0.08
+  bt_margin_lambda: 0.5
+  bt_anchor_lambda: 0.05
+  bt_target_correct: 0.8
+  bt_target_incorrect: 0.2
+  bt_verifier_aux_lambda: 0.2
+  bt_verifier_temperature: 4.0
+  bt_accumulate_steps: 8
+  bt_max_pairs_per_problem: 8
+
+  prover_lr: 1.0e-5
+  ppo_epochs: 4
+  ppo_batch_size: 8
+  ppo_target_updates_per_round: 0
+  ppo_log_every: 200
+  ppo_resume_checkpoint_interval: 100
+  ppo_early_stop_enable: true
+  ppo_early_stop_mode: loss
+  ppo_early_stop_patience_windows: 4
+  ppo_early_stop_min_delta: 5.0e-4
+  ppo_early_stop_warmup_updates: 500
+  ppo_max_wall_time_seconds: 0
+  prover_distributed_ppo: false
+  prover_distributed_world_size: 2
+  clip_ratio: 0.1
+  kl_coeff: 0.1
+  use_reference_model: true
+  split_reference_gpu: true
+  ppo_parallel_reference_eval: true
+
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 768
+  sneaky_do_sample: true
+  sneaky_temperature: 0.9
+  collect_early_stop_enable: true
+  collect_early_check_every: 20
+  collect_early_min_episodes: 60
+  collect_early_stop_epsilon: 0.05
+  collect_paired_roles: true
+  sneaky_retries_for_incorrect: 2
+  sneaky_select_hard_negative: true
+  sneaky_replay_persist_incorrect_candidates: true
+  sneaky_replay_incorrect_top_k: 0
+  paired_helpful_oracle_on_failure: true
+  sneaky_max_new_tokens: 768
+  helpful_warmup_max_length: 1024
+  ppo_max_length: 1024
+
+  reward_mode: "affine"
+  alpha_1: 2.0
+  beta_1: 1.0
+  alpha_2: -2.0
+  beta_2: -1.0
+  sneaky_fool_threshold: 0.5
+  supervised_single_identity: true
+  multi_gpu_verifier_parallel: true
+  parallel_verifier_inference: true
+  resume_from_checkpoint: true
+
+  oversight_decision_threshold: 0.5
+  verifier_decision_threshold: 0.5

@@ -1,0 +1,116 @@
+# Comparison study: Kirchner-style 1-verifier setup (SRC reward arm).
+# Key distinctions from PMV carry-over:
+#   - verifier/aggregator reset every round
+#   - SRC reward for prover updates
+#   - role-balanced collection without PMV hard-negative replay extras
+
+model:
+  prover_model: "Qwen/Qwen2.5-3B-Instruct"
+  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  num_verifiers: 1
+  use_quantization: true
+  prover_lora_r: 8
+  prover_lora_alpha: 16
+  verifier_lora_r: 8
+  verifier_lora_alpha: 16
+  aggregator_hidden_dim: 64
+
+dataset:
+  type: gsm8k
+
+training:
+  oversight_rule: "supervised"
+  seed: 0
+  mu_0: 0.5
+
+  rounds: 10
+  bootstrap_episodes: 100
+  bootstrap_oracle_episodes: 0
+  collect_episodes: 120
+  max_buffer_size: 8000
+  helpful_warmup_steps: 0
+  round_helpful_warmup_steps: 0
+
+  verifier_lr: 1.0e-4
+  verifier_epochs: 4
+  verifier_batch_size: 8
+  verifier_max_length: 512
+  phase1_micro_step: true
+  phase1_balance_labels: true
+  phase1_stratified_batches: true
+  verifier_dropout: 0.0
+  softmin_beta: 5.0
+  single_verifier_role: "computational_accuracy"
+
+  # Plain BT (no margin/anchor/aux terms).
+  bt_temperature: 4.0
+  bt_hard_negative_pairs: true
+  bt_centering_lambda: 0.0
+  bt_margin: 0.0
+  bt_margin_lambda: 0.0
+  bt_anchor_lambda: 0.0
+  bt_target_correct: 0.8
+  bt_target_incorrect: 0.2
+  bt_verifier_aux_lambda: 0.0
+  bt_verifier_temperature: 4.0
+  bt_accumulate_steps: 8
+  bt_max_pairs_per_problem: 8
+
+  prover_lr: 5.0e-6
+  ppo_epochs: 8
+  ppo_batch_size: 8
+  ppo_target_updates_per_round: 8000
+  ppo_log_every: 200
+  ppo_resume_checkpoint_interval: 100
+  ppo_early_stop_enable: true
+  ppo_early_stop_mode: "loss"
+  ppo_early_stop_patience_windows: 4
+  ppo_early_stop_min_delta: 5.0e-4
+  ppo_early_stop_warmup_updates: 1000
+  ppo_max_wall_time_seconds: 0
+  prover_distributed_ppo: true
+  prover_distributed_world_size: 2
+  clip_ratio: 0.1
+  kl_coeff: 0.2
+  use_reference_model: false
+
+  helpful_do_sample: false
+  helpful_temperature: 0.2
+  helpful_max_new_tokens: 384
+  sneaky_do_sample: true
+  sneaky_temperature: 1.0
+  collect_early_stop_enable: false
+  collect_early_check_every: 20
+  collect_early_min_episodes: 80
+  collect_early_stop_epsilon: 0.05
+  collect_paired_roles: false
+  collect_balanced_roles: true
+  sneaky_retries_for_incorrect: 1
+  sneaky_select_hard_negative: false
+  sneaky_replay_persist_incorrect_candidates: false
+  sneaky_replay_incorrect_top_k: 0
+  paired_helpful_oracle_on_failure: false
+  sneaky_max_new_tokens: 384
+  helpful_warmup_max_length: 768
+  ppo_max_length: 768
+
+  reward_mode: "src"
+  src_floor_reward: -1.0
+  alpha_1: 1.0
+  beta_1: 1.0
+  alpha_2: -0.5
+  beta_2: 0.25
+  sneaky_fool_threshold: 0.5
+
+  # Kirchner-style round protocol: no weight carry-over across rounds.
+  reset_verifier_each_round: true
+  reset_aggregator_each_round: true
+
+  supervised_single_identity: true
+  multi_gpu_verifier_parallel: true
+  parallel_verifier_inference: true
+  resume_from_checkpoint: false
+  checkpoint_root: "results/studies/pmv_kirchner_comparison/kirchner_1v_src/checkpoints"
+
+  oversight_decision_threshold: 0.5
+  verifier_decision_threshold: 0.5
