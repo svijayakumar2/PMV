@@ -1,11 +1,14 @@
 """
 Main training loop for PMV Game (Algorithm 1).
 
-Key structural decisions from the paper:
-  - Verifiers and aggregator PERSIST across rounds (Section 6.4)
-  - Prover RESETS each round (Section 6.3, Phase 2)
+Default structural decisions:
+  - Verifiers and aggregator persist across rounds
+  - Prover resets each round
   - Replay buffer accumulates across rounds
   - Each round: Phase 1 (Nash update) then Phase 2 (Stackelberg PPO)
+
+Experimental overrides (via config) can reset verifier/aggregator modules each
+round to emulate round-wise retraining protocols.
 """
 
 import sys
@@ -149,9 +152,9 @@ def main(config_path: str = "configs/config.yaml"):
         Path(checkpoint_root).mkdir(parents=True, exist_ok=True)
         print(f"Checkpoint dir: {run_ckpt_dir}")
 
-    # Create ensemble (verifiers + aggregator persist across rounds)
+    # Create ensemble (can persist or be reset-per-round depending on config)
     ensemble = VerifierEnsemble(config)
-    print("\nCreating verifiers (persist across rounds)...")
+    print("\nCreating verifiers...")
     ensemble.create_verifiers()
 
     replay_buffer = ReplayBuffer(
@@ -338,6 +341,10 @@ def main(config_path: str = "configs/config.yaml"):
 
     # ---- Main training loop (Algorithm 1) --------------------------------
     num_rounds = int(train_cfg.get("rounds", 10))
+    reset_verifier_each_round = bool(train_cfg.get("reset_verifier_each_round", False))
+    reset_aggregator_each_round = bool(
+        train_cfg.get("reset_aggregator_each_round", reset_verifier_each_round)
+    )
     max_rounds_this_run = max(0, int(train_cfg.get("max_rounds_this_run", 0)))
     rounds_completed_this_run = 0
     print(f"\n{'='*80}")
@@ -376,6 +383,15 @@ def main(config_path: str = "configs/config.yaml"):
             and resume_inflight_context is not None
             and int(resume_inflight_round) == int(round_idx)
         )
+
+        if reset_verifier_each_round and not is_resume_inflight_round:
+            print(
+                "\nRound reset enabled: recreating verifier modules before Phase 1 "
+                f"(round {round_idx})."
+            )
+            ensemble.reset_verifiers()
+            if reset_aggregator_each_round:
+                ensemble.reset_aggregator()
 
         prompts = []
         responses = []

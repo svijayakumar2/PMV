@@ -36,6 +36,7 @@ PROVER_DISTRIBUTED_PPO=${PROVER_DISTRIBUTED_PPO:-1}
 MAX_JOB_RUNTIME_SECONDS=${MAX_JOB_RUNTIME_SECONDS:-13000}
 ENABLE_2GPU_ACCEL=${ENABLE_2GPU_ACCEL:-1}
 SEED=${SEED:-0}
+DATASET=${DATASET:-math}
 
 RUN_NAME=${RUN_NAME:-math_roundtrain_2gpu_ddp}
 OUT_DIR=${OUT_DIR:-results/studies/multi_small_math_tuned/${RUN_NAME}}
@@ -90,7 +91,7 @@ python3 -u -m pmv.multi_small_study \
   --collect-episodes "${COLLECT_EPISODES}" \
   --helpful-warmup-steps "${HELPFUL_WARMUP_STEPS}" \
   --seed "${SEED}" \
-  --dataset math \
+  --dataset "${DATASET}" \
   --output-dir "${OUT_DIR}" \
   "${EXTRA_ARGS[@]}"
 

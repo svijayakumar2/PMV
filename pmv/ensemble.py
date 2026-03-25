@@ -1,7 +1,8 @@
 """
 Verifier ensemble: manages m verifiers and the oversight aggregator.
 
-Verifiers PERSIST across rounds (Section 6.4). Only the prover resets.
+By default verifiers persist across rounds. Some experimental configs can reset
+them each round to emulate round-wise retraining protocols.
 This implementation uses direct scoring only (no debate step).
 """
 
@@ -123,7 +124,7 @@ class VerifierEnsemble:
     # ---- lifecycle -------------------------------------------------------
 
     def create_verifiers(self):
-        """Create verifiers once at start. They persist across rounds."""
+        """Instantiate verifiers from model initialization/checkpoint state."""
         train_cfg = self.config.get("training", {})
         dataset_type = str(self.config.get("dataset", {}).get("type", "math")).lower()
 
@@ -171,6 +172,11 @@ class VerifierEnsemble:
             v.delete()
         self.verifiers = []
         cleanup_memory()
+
+    def reset_verifiers(self):
+        """Drop verifier modules and recreate fresh ones from initialization."""
+        self.delete_verifiers()
+        self.create_verifiers()
 
     # ---- scoring ---------------------------------------------------------
 

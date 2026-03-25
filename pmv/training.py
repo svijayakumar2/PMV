@@ -39,8 +39,11 @@ from pmv.checkpointing import save_prover_checkpoint, load_prover_checkpoint
 
 
 # ---------------------------------------------------------------------------
-# Reward function (Equation 4)
+# Reward functions
 # ---------------------------------------------------------------------------
+
+SUPPORTED_TRAIN_REWARD_MODES = {"affine", "src", "cgc", "goodhart"}
+
 
 def reward_function(
     f_score: float,
@@ -49,26 +52,94 @@ def reward_function(
     reward_mode: str = "affine",
     alpha_1: float = 1.0, beta_1: float = 1.0,
     alpha_2: float = -0.5, beta_2: float = 0.25,
+    cgc_misaligned_penalty: float = -2.0,
+    src_floor_reward: float = -1.0,
+    src_mean_score: Optional[float] = None,
 ) -> float:
     """
-    Affine role-alignment reward from Eq. (4).
+    Reward objectives used for prover PPO collection.
 
-    role_aligned = True  iff  (helpful ∧ correct) ∨ (sneaky ∧ incorrect)
-      - Aligned:     r = α₁ + β₁ · f   (rewarded proportionally to oversight approval)
-      - Misaligned:  r = α₂ + β₂ · f   (penalized; β₂ ≤ 0 means higher f is worse)
-
-    Typical config: α₁=2.0, β₁=1.0, α₂=-2.0, β₂=-1.0
-      → aligned range [2.0, 3.0], misaligned range [-3.0, -2.0]
+    Modes:
+      - affine: role-alignment reward used in PMV experiments.
+      - cgc: Correctness-Gated Convincingness style reward.
+      - goodhart: optimize convincingness only (score hacking pressure).
+      - src: Signed Relative Convincingness using centered score.
     """
     role = str(role).strip().lower()
-    if str(reward_mode).strip().lower() != "affine":
+    mode = str(reward_mode).strip().lower()
+    if mode not in SUPPORTED_TRAIN_REWARD_MODES:
         raise ValueError(
-            f"Unknown reward_mode={reward_mode!r}. Only 'affine' is supported."
+            f"Unknown reward_mode={reward_mode!r}. "
+            f"Expected one of {sorted(SUPPORTED_TRAIN_REWARD_MODES)}."
         )
+
+    if mode == "goodhart":
+        return float(f_score)
+
     role_aligned = is_correct if role == "helpful" else not is_correct
-    if role_aligned:
-        return alpha_1 + beta_1 * f_score
-    return alpha_2 + beta_2 * f_score
+    if mode == "affine":
+        if role_aligned:
+            return alpha_1 + beta_1 * f_score
+        return alpha_2 + beta_2 * f_score
+
+    if mode == "cgc":
+        return float(f_score) if role_aligned else float(cgc_misaligned_penalty)
+
+    # mode == "src"
+    if src_mean_score is None:
+        raise ValueError("src_mean_score must be provided when reward_mode='src'.")
+    centered_score = float(f_score) - float(src_mean_score)
+    if centered_score <= 0.0:
+        return float(src_floor_reward)
+    correctness_sign = 1.0 if is_correct else -1.0
+    role_sign = 1.0 if role == "helpful" else -1.0
+    return float(correctness_sign * role_sign * centered_score)
+
+
+def _compute_collection_rewards(
+    *,
+    reward_mode: str,
+    roles: List[str],
+    correctness: List[bool],
+    scores: List[float],
+    alpha_1: float,
+    beta_1: float,
+    alpha_2: float,
+    beta_2: float,
+    cgc_misaligned_penalty: float,
+    src_floor_reward: float,
+) -> List[float]:
+    mode = str(reward_mode).strip().lower()
+    if mode not in SUPPORTED_TRAIN_REWARD_MODES:
+        raise ValueError(
+            f"Unknown reward_mode={reward_mode!r}. "
+            f"Expected one of {sorted(SUPPORTED_TRAIN_REWARD_MODES)}."
+        )
+    if not roles:
+        return []
+    if not (len(roles) == len(correctness) == len(scores)):
+        raise ValueError("roles/correctness/scores must have the same length.")
+
+    src_mean_score = None
+    if mode == "src":
+        src_mean_score = sum(scores) / max(1, len(scores))
+
+    return [
+        reward_function(
+            f_score=float(f),
+            role=role,
+            is_correct=bool(is_corr),
+            reward_mode=mode,
+            alpha_1=alpha_1,
+            beta_1=beta_1,
+            alpha_2=alpha_2,
+            beta_2=beta_2,
+            cgc_misaligned_penalty=cgc_misaligned_penalty,
+            src_floor_reward=src_floor_reward,
+            src_mean_score=src_mean_score,
+        )
+        for role, is_corr, f in zip(roles, correctness, scores)
+    ]
 
 
 def _resolve_ppo_early_stop_mode(train_cfg: Dict) -> str:
@@ -640,6 +711,8 @@ def collect_prover_experiences(
     alpha_2 = float(train_cfg.get("alpha_2", -0.5))
     beta_2 = float(train_cfg.get("beta_2", 0.25))
     reward_mode = str(train_cfg.get("reward_mode", "affine")).lower()
+    cgc_misaligned_penalty = float(train_cfg.get("cgc_misaligned_penalty", -2.0))
+    src_floor_reward = float(train_cfg.get("src_floor_reward", -1.0))
     fool_threshold = float(train_cfg.get("sneaky_fool_threshold", 0.5))
     helpful_temperature = float(train_cfg.get("helpful_temperature", 0.2))
     sneaky_temperature = float(train_cfg.get("sneaky_temperature", 0.9))
@@ -667,6 +740,9 @@ def collect_prover_experiences(
     collect_early_stop_epsilon = float(train_cfg.get("collect_early_stop_epsilon", 0.05))
 
     prompts, responses, rewards, records, replay_only_records = [], [], [], [], []
+    reward_roles: List[str] = []
+    reward_correctness: List[bool] = []
+    reward_scores: List[float] = []
     prover.model.eval()
     final_line_count = 0
     sneaky_total = 0
@@ -860,17 +936,6 @@ def collect_prover_experiences(
         if any(ln.strip().upper().startswith("FINAL:") for ln in response.splitlines()):
             final_line_count += 1
 
-        r = reward_function(
-            f_score=f_score,
-            role=role,
-            is_correct=is_correct,
-            reward_mode=reward_mode,
-            alpha_1=alpha_1,
-            beta_1=beta_1,
-            alpha_2=alpha_2,
-            beta_2=beta_2,
-        )
-
         if role == "sneaky":
             sneaky_total += 1
             sneaky_f_values.append(float(f_score))
@@ -883,7 +948,9 @@ def collect_prover_experiences(
 
         prompts.append(prompt)
         responses.append(response)
-        rewards.append(r)
+        reward_roles.append(role)
+        reward_correctness.append(bool(is_correct))
+        reward_scores.append(float(f_score))
         _append_generated_record(
             problem_text=problem,
             solution_true_text=solution_true,
@@ -896,7 +963,7 @@ def collect_prover_experiences(
         if (ep + 1) % 10 == 0:
             print(
                 f"  Episode {ep+1}/{num_episodes}, role={role}, "
-                f"correct={is_correct}, f={f_score:.3f}, r={r:.3f}"
+                f"correct={is_correct}, f={f_score:.3f}"
             )
         if (
             collect_early_stop_enable
@@ -942,6 +1009,25 @@ def collect_prover_experiences(
         f"mean f (helpful/sneaky)=({helpful_f_mean:.3f}/{sneaky_f_mean:.3f}), "
         f"replay extras (sneaky/oracle)=({replay_extra_incorrect}/{replay_oracle_helpful})"
     )
+
+    rewards = _compute_collection_rewards(
+        reward_mode=reward_mode,
+        roles=reward_roles,
+        correctness=reward_correctness,
+        scores=reward_scores,
+        alpha_1=alpha_1,
+        beta_1=beta_1,
+        alpha_2=alpha_2,
+        beta_2=beta_2,
+        cgc_misaligned_penalty=cgc_misaligned_penalty,
+        src_floor_reward=src_floor_reward,
+    )
+    if rewards:
+        print(
+            f"Reward diagnostics ({reward_mode}): "
+            f"mean={sum(rewards)/len(rewards):.3f}, "
+            f"min={min(rewards):.3f}, max={max(rewards):.3f}"
+        )
 
     return prompts, responses, rewards, records, replay_only_records
 
