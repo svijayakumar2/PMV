@@ -34,7 +34,11 @@ from pmv.prover import (
     ensure_final_line,
 )
 from pmv.training import (
-    train_phase1, collect_prover_experiences, train_prover_ppo, train_prover_helpful_warmup,
+    train_phase1,
+    collect_prover_experiences,
+    train_prover_ppo,
+    train_prover_helpful_warmup,
+    train_prover_kirchner_style_round,
 )
 from pmv.utils import get_available_gpus, cleanup_memory
 
@@ -345,6 +349,7 @@ def main(config_path: str = "configs/config.yaml"):
     reset_aggregator_each_round = bool(
         train_cfg.get("reset_aggregator_each_round", reset_verifier_each_round)
     )
+    kirchner_round_training = bool(train_cfg.get("kirchner_round_training", False))
     max_rounds_this_run = max(0, int(train_cfg.get("max_rounds_this_run", 0)))
     rounds_completed_this_run = 0
     print(f"\n{'='*80}")
@@ -399,6 +404,8 @@ def main(config_path: str = "configs/config.yaml"):
         new_records = []
         replay_only_records = []
         ppo_resume_update_idx = 0
+        ppo_already_ran = False
+        kirchner_round_summary = None
 
         if is_resume_inflight_round:
             print(
@@ -457,32 +464,51 @@ def main(config_path: str = "configs/config.yaml"):
             print("PPO reference prover disabled (lower memory mode).")
 
         if not is_resume_inflight_round:
-            train_prover_helpful_warmup(
-                prover=prover,
-                dataset=dataset,
-                config=config,
-                steps_override=round_warmup_steps,
-            )
-            if _job_runtime_exceeded():
-                print(
-                    "Stopping before collection due to max_job_runtime_seconds="
-                    f"{max_job_runtime_seconds}."
+            if kirchner_round_training:
+                (
+                    prompts,
+                    responses,
+                    rewards,
+                    new_records,
+                    replay_only_records,
+                    kirchner_round_summary,
+                ) = train_prover_kirchner_style_round(
+                    prover=prover,
+                    ensemble=ensemble,
+                    dataset=dataset,
+                    config=config,
+                    round_idx=round_idx,
+                    base_prover=base_prover,
+                    should_stop_early=_job_runtime_exceeded,
                 )
-                if save_checkpoints and (round_idx % max(1, checkpoint_every) == 0):
-                    ckpt_path = run_ckpt_dir / f"round_{round_idx-1:03d}.pt"
-                    if latest_alias.exists():
-                        print(f"Latest completed checkpoint remains: {latest_alias}")
-                prover.delete()
-                if base_prover is not None:
-                    base_prover.delete()
-                    del base_prover
-                del prover
-                cleanup_memory()
-                break
+                ppo_already_ran = True
+            else:
+                train_prover_helpful_warmup(
+                    prover=prover,
+                    dataset=dataset,
+                    config=config,
+                    steps_override=round_warmup_steps,
+                )
+                if _job_runtime_exceeded():
+                    print(
+                        "Stopping before collection due to max_job_runtime_seconds="
+                        f"{max_job_runtime_seconds}."
+                    )
+                    if save_checkpoints and (round_idx % max(1, checkpoint_every) == 0):
+                        ckpt_path = run_ckpt_dir / f"round_{round_idx-1:03d}.pt"
+                        if latest_alias.exists():
+                            print(f"Latest completed checkpoint remains: {latest_alias}")
+                    prover.delete()
+                    if base_prover is not None:
+                        base_prover.delete()
+                        del base_prover
+                    del prover
+                    cleanup_memory()
+                    break
 
-            prompts, responses, rewards, new_records, replay_only_records = collect_prover_experiences(
-                prover, ensemble, dataset, config, round_idx,
-            )
+                prompts, responses, rewards, new_records, replay_only_records = collect_prover_experiences(
+                    prover, ensemble, dataset, config, round_idx,
+                )
             if rewards:
                 avg_r = sum(rewards) / len(rewards)
                 helpful_correct = sum(
@@ -528,6 +554,7 @@ def main(config_path: str = "configs/config.yaml"):
                     "mean_helpful_f": mean_helpful_f,
                     "mean_sneaky_f": mean_sneaky_f,
                     "mean_reward": avg_r,
+                    "kirchner_round_summary": kirchner_round_summary,
                 })
 
                 print(f"Mean reward: {avg_r:.4f}")
@@ -539,7 +566,7 @@ def main(config_path: str = "configs/config.yaml"):
                         f"{sneaky_fooled}/{sneaky_total}"
                     )
 
-        if save_checkpoints and target_updates > 0:
+        if save_checkpoints and target_updates > 0 and (not ppo_already_ran):
             # Save round context once (replay snapshot + PPO batch data).
             save_checkpoint(
                 path=str(inflight_context_alias),
@@ -584,20 +611,21 @@ def main(config_path: str = "configs/config.yaml"):
                 )
                 progress_state["last_saved"] = int(step_done)
 
-        train_prover_ppo(
-            prover=prover,
-            prompts=prompts,
-            responses=responses,
-            rewards=rewards,
-            config=config,
-            base_prover=base_prover,
-            resume_update_idx=ppo_resume_update_idx,
-            on_progress_update=_on_ppo_progress,
-            should_stop_early=_job_runtime_exceeded,
-            checkpoint_path=str(inflight_state_alias) if save_checkpoints and target_updates > 0 else None,
-            checkpoint_round_idx=round_idx,
-            checkpoint_config_path=config_path,
-        )
+        if not ppo_already_ran:
+            train_prover_ppo(
+                prover=prover,
+                prompts=prompts,
+                responses=responses,
+                rewards=rewards,
+                config=config,
+                base_prover=base_prover,
+                resume_update_idx=ppo_resume_update_idx,
+                on_progress_update=_on_ppo_progress,
+                should_stop_early=_job_runtime_exceeded,
+                checkpoint_path=str(inflight_state_alias) if save_checkpoints and target_updates > 0 else None,
+                checkpoint_round_idx=round_idx,
+                checkpoint_config_path=config_path,
+            )
         replay_buffer.add_batch(new_records)
         replay_buffer.add_batch(replay_only_records)
         print(f"Buffer size: {len(replay_buffer)}")

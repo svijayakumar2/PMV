@@ -18,6 +18,7 @@ import os
 import random
 import socket
 import time
+import copy
 from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.distributed as dist
@@ -268,7 +269,7 @@ def train_prover_helpful_warmup(
 
     trainable = [p for p in prover.model.parameters() if p.requires_grad]
     if not trainable:
-        return
+        return 0
     optimizer = torch.optim.Adam(trainable, lr=lr)
 
     prover.model.train()
@@ -1032,6 +1033,250 @@ def collect_prover_experiences(
     return prompts, responses, rewards, records, replay_only_records
 
 
+def _kirchner_round_metrics(records: List[SolutionRecord]) -> Dict[str, Optional[float]]:
+    helpful_correct_scores = [
+        float(rec.oversight_score)
+        for rec in records
+        if rec.role == "helpful"
+        and rec.correctness >= 0.5
+        and rec.oversight_score is not None
+    ]
+    sneaky_incorrect_scores = [
+        float(rec.oversight_score)
+        for rec in records
+        if rec.role == "sneaky"
+        and rec.correctness < 0.5
+        and rec.oversight_score is not None
+    ]
+    sneaky_records = [rec for rec in records if rec.role == "sneaky"]
+    all_records = list(records)
+
+    sneaky_accuracy = None
+    if sneaky_records:
+        sneaky_accuracy = float(
+            sum(1 for rec in sneaky_records if rec.correctness >= 0.5)
+            / len(sneaky_records)
+        )
+    overall_accuracy = None
+    if all_records:
+        overall_accuracy = float(
+            sum(1 for rec in all_records if rec.correctness >= 0.5)
+            / len(all_records)
+        )
+
+    return {
+        "avg_helpful_correct_score": (
+            float(sum(helpful_correct_scores) / len(helpful_correct_scores))
+            if helpful_correct_scores else None
+        ),
+        "avg_sneaky_incorrect_score": (
+            float(sum(sneaky_incorrect_scores) / len(sneaky_incorrect_scores))
+            if sneaky_incorrect_scores else None
+        ),
+        "sneaky_accuracy": sneaky_accuracy,
+        "overall_accuracy": overall_accuracy,
+        "n_helpful_correct": len(helpful_correct_scores),
+        "n_sneaky_incorrect": len(sneaky_incorrect_scores),
+        "n_sneaky_total": len(sneaky_records),
+        "n_total": len(all_records),
+    }
+
+
+def _kirchner_stop_satisfied(
+    *,
+    reward_mode: str,
+    metrics: Dict[str, Optional[float]],
+    score_gap_tol: float,
+    cgc_max_accuracy: float,
+    goodhart_max_accuracy: float,
+    goodhart_recent_accuracy: Optional[float],
+) -> Tuple[bool, str]:
+    mode = str(reward_mode).strip().lower()
+    helpful_correct = metrics.get("avg_helpful_correct_score")
+    sneaky_incorrect = metrics.get("avg_sneaky_incorrect_score")
+    sneaky_accuracy = metrics.get("sneaky_accuracy")
+
+    if mode == "src":
+        if helpful_correct is None or sneaky_incorrect is None:
+            return False, "waiting_for_score_coverage"
+        if sneaky_incorrect >= (helpful_correct - score_gap_tol):
+            return True, "src_score_match"
+        return False, "src_not_matched"
+
+    if mode == "cgc":
+        if helpful_correct is None or sneaky_incorrect is None or sneaky_accuracy is None:
+            return False, "waiting_for_cgc_coverage"
+        if sneaky_incorrect >= (helpful_correct - score_gap_tol) and sneaky_accuracy <= cgc_max_accuracy:
+            return True, "cgc_score_match_and_low_accuracy"
+        return False, "cgc_not_matched"
+
+    if mode == "goodhart":
+        if goodhart_recent_accuracy is None:
+            return False, "waiting_for_goodhart_window"
+        if goodhart_recent_accuracy <= goodhart_max_accuracy:
+            return True, "goodhart_low_accuracy"
+        return False, "goodhart_not_matched"
+
+    return False, "unsupported_mode_for_kirchner_stop"
+
+
+def train_prover_kirchner_style_round(
+    *,
+    prover: Prover,
+    ensemble: VerifierEnsemble,
+    dataset,
+    config: Dict,
+    round_idx: int,
+    base_prover: Optional[Prover] = None,
+    should_stop_early: Optional[Callable[[], bool]] = None,
+) -> Tuple[List[str], List[str], List[float], List[SolutionRecord], List[SolutionRecord], Dict]:
+    """
+    Kirchner-style prover phase:
+      repeat { collect batch -> evaluate stop criterion -> PPO chunk }
+    until stop criterion is met or update budget is exhausted.
+    """
+    train_cfg = config["training"]
+    reward_mode = str(train_cfg.get("reward_mode", "src")).strip().lower()
+    target_updates = max(0, int(train_cfg.get("ppo_target_updates_per_round", 0)))
+    updates_per_iter = max(1, int(train_cfg.get("kirchner_updates_per_iter", 400)))
+    src_score_gap_tol = float(train_cfg.get("kirchner_src_score_gap_tol", 0.0))
+    cgc_max_accuracy = float(train_cfg.get("kirchner_cgc_max_accuracy", 0.05))
+    goodhart_max_accuracy = float(train_cfg.get("kirchner_goodhart_max_accuracy", 0.2))
+    goodhart_window_iters = max(1, int(train_cfg.get("kirchner_goodhart_accuracy_window_iters", 1)))
+    min_updates_before_stop = max(0, int(train_cfg.get("kirchner_min_updates_before_stop", 0)))
+
+    all_prompts: List[str] = []
+    all_responses: List[str] = []
+    all_rewards: List[float] = []
+    all_records: List[SolutionRecord] = []
+    all_replay_only_records: List[SolutionRecord] = []
+    history: List[Dict] = []
+    updates_done = 0
+    iter_idx = 0
+    stop_reason = "budget_exhausted"
+
+    print(
+        "Kirchner-style prover schedule: "
+        f"mode={reward_mode}, budget={target_updates}, updates_per_iter={updates_per_iter}"
+    )
+
+    while True:
+        if should_stop_early is not None and should_stop_early():
+            stop_reason = "global_runtime_budget"
+            break
+
+        prompts_i, responses_i, rewards_i, records_i, replay_i = collect_prover_experiences(
+            prover=prover,
+            ensemble=ensemble,
+            math_dataset=dataset,
+            config=config,
+            round_idx=round_idx,
+        )
+        all_prompts.extend(prompts_i)
+        all_responses.extend(responses_i)
+        all_rewards.extend(rewards_i)
+        all_records.extend(records_i)
+        all_replay_only_records.extend(replay_i)
+
+        metrics = _kirchner_round_metrics(records_i)
+        overall_acc = metrics.get("overall_accuracy")
+        recent_overall = None
+        if history or overall_acc is not None:
+            acc_hist = [h.get("overall_accuracy") for h in history if h.get("overall_accuracy") is not None]
+            if overall_acc is not None:
+                acc_hist.append(float(overall_acc))
+            if acc_hist:
+                window = acc_hist[-goodhart_window_iters:]
+                recent_overall = float(sum(window) / len(window))
+
+        should_stop, reason = _kirchner_stop_satisfied(
+            reward_mode=reward_mode,
+            metrics=metrics,
+            score_gap_tol=src_score_gap_tol,
+            cgc_max_accuracy=cgc_max_accuracy,
+            goodhart_max_accuracy=goodhart_max_accuracy,
+            goodhart_recent_accuracy=recent_overall,
+        )
+        history.append(
+            {
+                "iter": iter_idx,
+                "updates_done": updates_done,
+                "stop_check_reason": reason,
+                "overall_accuracy": overall_acc,
+                "recent_overall_accuracy": recent_overall,
+                **metrics,
+            }
+        )
+        print(
+            "  Kirchner iter "
+            f"{iter_idx}: updates_done={updates_done}, "
+            f"helpful_correct_f={metrics.get('avg_helpful_correct_score')}, "
+            f"sneaky_incorrect_f={metrics.get('avg_sneaky_incorrect_score')}, "
+            f"sneaky_acc={metrics.get('sneaky_accuracy')}, "
+            f"overall_acc={overall_acc}, check={reason}"
+        )
+        if should_stop and updates_done >= min_updates_before_stop:
+            stop_reason = reason
+            break
+
+        if target_updates > 0 and updates_done >= target_updates:
+            stop_reason = "budget_exhausted"
+            break
+
+        iter_budget = updates_per_iter
+        if target_updates > 0:
+            iter_budget = min(iter_budget, target_updates - updates_done)
+            if iter_budget <= 0:
+                stop_reason = "budget_exhausted"
+                break
+
+        iter_config = copy.deepcopy(config)
+        iter_train_cfg = iter_config.setdefault("training", {})
+        iter_train_cfg["ppo_target_updates_per_round"] = int(iter_budget)
+        iter_train_cfg["ppo_early_stop_enable"] = False
+        iter_train_cfg["ppo_early_stop_mode"] = "full"
+
+        completed = int(
+            train_prover_ppo(
+                prover=prover,
+                prompts=prompts_i,
+                responses=responses_i,
+                rewards=rewards_i,
+                config=iter_config,
+                base_prover=base_prover,
+                resume_update_idx=0,
+                should_stop_early=should_stop_early,
+            )
+            or 0
+        )
+        if completed <= 0:
+            stop_reason = "no_ppo_progress"
+            break
+        updates_done += completed
+        iter_idx += 1
+
+    summary = {
+        "reward_mode": reward_mode,
+        "updates_done": int(updates_done),
+        "updates_budget": int(target_updates),
+        "iterations": int(len(history)),
+        "stop_reason": stop_reason,
+        "history": history,
+    }
+    print(
+        "Kirchner-style prover round complete: "
+        f"updates_done={updates_done}/{target_updates}, stop_reason={stop_reason}"
+    )
+    return (
+        all_prompts,
+        all_responses,
+        all_rewards,
+        all_records,
+        all_replay_only_records,
+        summary,
+    )
+
+
 def compute_log_probs_batch(
     model,
     tokenizer,
@@ -1407,7 +1652,7 @@ def train_prover_ppo(
 ):
     """PPO training for prover (Algorithm 2 / Equation 5)."""
     if not prompts:
-        return
+        return 0
     print("\nTraining prover via PPO...")
 
     train_cfg = config["training"]
@@ -1571,7 +1816,11 @@ def train_prover_ppo(
             del _post_prover
             if on_progress_update is not None and target_updates > 0:
                 on_progress_update(target_updates)
-            return
+            try:
+                ddp_payload = load_prover_checkpoint(str(result_path), prover=None, strict=False)
+                return int((ddp_payload.get("extra", {}) if isinstance(ddp_payload, dict) else {}).get("ppo_step_done", target_updates))
+            except Exception:
+                return int(target_updates)
 
     def _ppo_update_batch(idx_list: List[int]) -> Optional[float]:
         bidx = torch.tensor(idx_list, dtype=torch.long, device=prover.device)
@@ -1672,7 +1921,10 @@ def train_prover_ppo(
                 cleanup_memory()
         if n_updates > 0:
             print(f"  PPO complete: {n_updates}/{target_updates} updates, avg loss: {running_loss / n_updates:.4f}")
+        completed_steps = max(0, int(step + 1 - start_update)) if target_updates > start_update else 0
+        return int(completed_steps)
     else:
+        total_updates = 0
         for epoch in range(epochs):
             prover.model.train()
             indices = torch.randperm(len(prompts))
@@ -1685,6 +1937,8 @@ def train_prover_ppo(
                     continue
                 epoch_loss += loss_val
                 n_updates += 1
+                total_updates += 1
 
             if n_updates > 0:
                 print(f"  PPO epoch {epoch+1}/{epochs}, loss: {epoch_loss / n_updates:.4f}")
+        return int(total_updates)

@@ -6,7 +6,7 @@
 #BSUB -R "rusage[mem=128GB]"
 #BSUB -o /u/saranyaibm2/.lsbatch/%J.out
 #BSUB -e /u/saranyaibm2/.lsbatch/%J.err
-#BSUB -W 48:00
+#BSUB -W 12:00
 
 set -euo pipefail
 

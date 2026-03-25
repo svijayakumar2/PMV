@@ -1,12 +1,6 @@
-# Comparison study: Kirchner-style 1-verifier setup (Goodhart reward arm).
-# Key distinctions from PMV carry-over:
-#   - verifier/aggregator reset every round
-#   - Goodhart reward for prover updates
-#   - role-balanced collection without PMV hard-negative replay extras
-
 model:
-  prover_model: "Qwen/Qwen2.5-3B-Instruct"
-  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  prover_model: Qwen/Qwen2.5-3B-Instruct
+  verifier_model: Qwen/Qwen2.5-3B-Instruct
   num_verifiers: 1
   use_quantization: true
   prover_lora_r: 8
@@ -14,15 +8,13 @@ model:
   verifier_lora_r: 8
   verifier_lora_alpha: 16
   aggregator_hidden_dim: 64
-
 dataset:
-  type: gsm8k
-
+  type: math
+  num_samples: 50000
 training:
-  oversight_rule: "supervised"
+  oversight_rule: supervised
   seed: 0
   mu_0: 0.5
-
   rounds: 10
   bootstrap_episodes: 100
   bootstrap_oracle_episodes: 0
@@ -30,8 +22,7 @@ training:
   max_buffer_size: 8000
   helpful_warmup_steps: 0
   round_helpful_warmup_steps: 0
-
-  verifier_lr: 1.0e-4
+  verifier_lr: 0.0001
   verifier_epochs: 4
   verifier_batch_size: 8
   verifier_max_length: 512
@@ -40,9 +31,7 @@ training:
   phase1_stratified_batches: true
   verifier_dropout: 0.0
   softmin_beta: 5.0
-  single_verifier_role: "computational_accuracy"
-
-  # Plain BT (no margin/anchor/aux terms).
+  single_verifier_role: computational_accuracy
   bt_temperature: 4.0
   bt_hard_negative_pairs: true
   bt_centering_lambda: 0.0
@@ -55,17 +44,21 @@ training:
   bt_verifier_temperature: 4.0
   bt_accumulate_steps: 8
   bt_max_pairs_per_problem: 8
-
-  prover_lr: 5.0e-6
+  prover_lr: 5.0e-06
   ppo_epochs: 8
   ppo_batch_size: 8
   ppo_target_updates_per_round: 8000
+  kirchner_round_training: true
+  kirchner_updates_per_iter: 400
+  kirchner_min_updates_before_stop: 400
+  kirchner_goodhart_max_accuracy: 0.2
+  kirchner_goodhart_accuracy_window_iters: 1
   ppo_log_every: 200
   ppo_resume_checkpoint_interval: 100
-  ppo_early_stop_enable: true
-  ppo_early_stop_mode: "loss"
+  ppo_early_stop_enable: false
+  ppo_early_stop_mode: full
   ppo_early_stop_patience_windows: 4
-  ppo_early_stop_min_delta: 5.0e-4
+  ppo_early_stop_min_delta: 0.0005
   ppo_early_stop_warmup_updates: 1000
   ppo_max_wall_time_seconds: 0
   prover_distributed_ppo: true
@@ -73,7 +66,6 @@ training:
   clip_ratio: 0.1
   kl_coeff: 0.2
   use_reference_model: false
-
   helpful_do_sample: false
   helpful_temperature: 0.2
   helpful_max_new_tokens: 384
@@ -93,23 +85,20 @@ training:
   sneaky_max_new_tokens: 384
   helpful_warmup_max_length: 768
   ppo_max_length: 768
-
-  reward_mode: "goodhart"
+  reward_mode: goodhart
   alpha_1: 1.0
   beta_1: 1.0
   alpha_2: -0.5
   beta_2: 0.25
   sneaky_fool_threshold: 0.5
-
-  # Kirchner-style round protocol: no weight carry-over across rounds.
   reset_verifier_each_round: true
   reset_aggregator_each_round: true
-
   supervised_single_identity: true
   multi_gpu_verifier_parallel: true
   parallel_verifier_inference: true
-  resume_from_checkpoint: false
-  checkpoint_root: "results/studies/pmv_kirchner_comparison/kirchner_1v_goodhart/checkpoints"
-
+  resume_from_checkpoint: true
+  checkpoint_root: results/studies/pmv_kirchner_comparison/kirchner_1v_goodhart/checkpoints
   oversight_decision_threshold: 0.5
   verifier_decision_threshold: 0.5
+  max_job_runtime_seconds: 39600
+  checkpoint_every: 1

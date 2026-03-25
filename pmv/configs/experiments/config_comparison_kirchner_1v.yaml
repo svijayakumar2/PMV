@@ -16,7 +16,8 @@ model:
   aggregator_hidden_dim: 64
 
 dataset:
-  type: gsm8k
+  type: math
+  num_samples: 50000
 
 training:
   oversight_rule: "supervised"

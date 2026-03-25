@@ -1,9 +1,6 @@
-# Comparison study: PMV "ours" method with 1 verifier.
-# Same PE-Min objective stack as 3v PMV, only ensemble size changes.
-
 model:
-  prover_model: "Qwen/Qwen2.5-3B-Instruct"
-  verifier_model: "Qwen/Qwen2.5-3B-Instruct"
+  prover_model: Qwen/Qwen2.5-3B-Instruct
+  verifier_model: Qwen/Qwen2.5-3B-Instruct
   num_verifiers: 1
   use_quantization: true
   prover_lora_r: 8
@@ -11,15 +8,13 @@ model:
   verifier_lora_r: 8
   verifier_lora_alpha: 16
   aggregator_hidden_dim: 64
-
 dataset:
-  type: gsm8k
-
+  type: math
+  num_samples: 50000
 training:
-  oversight_rule: "pe_min"
+  oversight_rule: pe_min
   seed: 0
   mu_0: 0.75
-
   rounds: 5
   bootstrap_episodes: 100
   bootstrap_oracle_episodes: 100
@@ -27,8 +22,7 @@ training:
   max_buffer_size: 8000
   helpful_warmup_steps: 80
   round_helpful_warmup_steps: 0
-
-  verifier_lr: 1.0e-4
+  verifier_lr: 0.0001
   verifier_epochs: 3
   verifier_batch_size: 8
   verifier_max_length: 768
@@ -36,8 +30,7 @@ training:
   verifier_prompt_margin: 256
   verifier_dropout: 0.0
   softmin_beta: 5.0
-  single_verifier_role: "computational_accuracy"
-
+  single_verifier_role: computational_accuracy
   bt_temperature: 4.0
   bt_hard_negative_pairs: true
   bt_centering_lambda: 0.0
@@ -50,21 +43,18 @@ training:
   bt_verifier_temperature: 4.0
   bt_accumulate_steps: 8
   bt_max_pairs_per_problem: 8
-
-  # PE-Min stability settings.
   pe_min_reset_aggregator: false
   pe_min_verifier_epochs: 10
-
-  prover_lr: 1.0e-5
+  prover_lr: 1.0e-05
   ppo_epochs: 4
   ppo_batch_size: 8
   ppo_target_updates_per_round: 8000
   ppo_log_every: 200
   ppo_resume_checkpoint_interval: 100
   ppo_early_stop_enable: true
-  ppo_early_stop_mode: "loss"
+  ppo_early_stop_mode: loss
   ppo_early_stop_patience_windows: 4
-  ppo_early_stop_min_delta: 5.0e-4
+  ppo_early_stop_min_delta: 0.0005
   ppo_early_stop_warmup_updates: 1000
   ppo_max_wall_time_seconds: 0
   prover_distributed_ppo: true
@@ -74,7 +64,6 @@ training:
   use_reference_model: true
   split_reference_gpu: true
   ppo_parallel_reference_eval: true
-
   helpful_do_sample: false
   helpful_temperature: 0.2
   helpful_max_new_tokens: 512
@@ -93,23 +82,20 @@ training:
   sneaky_max_new_tokens: 512
   helpful_warmup_max_length: 1024
   ppo_max_length: 1024
-
-  reward_mode: "affine"
+  reward_mode: affine
   alpha_1: 2.0
   beta_1: 1.0
   alpha_2: -2.0
   beta_2: -1.0
   sneaky_fool_threshold: 0.5
-
-  # Keep PMV carry-over training dynamics for our method.
   reset_verifier_each_round: false
   reset_aggregator_each_round: false
-
   supervised_single_identity: true
   multi_gpu_verifier_parallel: true
   parallel_verifier_inference: true
-  resume_from_checkpoint: false
-  checkpoint_root: "results/studies/pmv_kirchner_comparison/ours_1v/checkpoints"
-
+  resume_from_checkpoint: true
+  checkpoint_root: results/studies/pmv_kirchner_comparison/ours_1v/checkpoints
   oversight_decision_threshold: 0.5
   verifier_decision_threshold: 0.5
+  max_job_runtime_seconds: 39600
+  checkpoint_every: 1

@@ -6,7 +6,7 @@
 #BSUB -R "rusage[mem=128GB]"
 #BSUB -o /u/saranyaibm2/.lsbatch/%J.out
 #BSUB -e /u/saranyaibm2/.lsbatch/%J.err
-#BSUB -W 24:00
+#BSUB -W 12:00
 
 set -euo pipefail
 
@@ -69,7 +69,7 @@ VERIFIER_DECISION_THRESHOLD=${VERIFIER_DECISION_THRESHOLD:-0.5}
 FOOL_THRESHOLD=${FOOL_THRESHOLD:-0.5}
 EVAL_TEMPS=${EVAL_TEMPS:-"0.7 1.0"}
 SEED=${SEED:-0}
-DATASET=${DATASET:-gsm8k}
+DATASET=${DATASET:-math}
 
 # Stronger-than-paper robustness settings.
 SNEAKY_REWARD_SUITE_ENABLE=${SNEAKY_REWARD_SUITE_ENABLE:-1}
