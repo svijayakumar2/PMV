@@ -723,6 +723,99 @@ def build_scorecard(
     }
 
 
+def build_kirchner_steps_to_exploit_summary(kirchner_attack_suite: Dict) -> Dict:
+    """
+    Build Figure-6-style exploitability summary from attack-suite outputs.
+    """
+    if not isinstance(kirchner_attack_suite, dict):
+        return {"enabled": False, "objectives": {}, "aggregate": {}}
+
+    attacks = kirchner_attack_suite.get("attacks")
+    if not isinstance(attacks, dict) or not attacks:
+        return {
+            "enabled": bool(kirchner_attack_suite.get("enabled", False)),
+            "objectives": {},
+            "aggregate": {
+                "num_objectives": 0,
+                "num_exploits_found": 0,
+                "all_exploits_found": False,
+                "any_incomplete": False,
+                "min_steps_to_exploit": None,
+                "median_steps_to_exploit": None,
+            },
+        }
+
+    per_objective: Dict[str, Dict] = {}
+    found_steps: List[int] = []
+    incomplete_count = 0
+
+    for objective in sorted(attacks.keys()):
+        payload = attacks.get(objective) or {}
+        if not isinstance(payload, dict):
+            continue
+
+        success = bool(payload.get("success", False))
+        updates_to_success = payload.get("updates_to_success")
+        attack_updates_done = int(payload.get("attack_updates_done") or 0)
+        updates_budget_raw = payload.get("updates_budget")
+        updates_budget = (
+            int(updates_budget_raw)
+            if updates_budget_raw is not None
+            else None
+        )
+
+        steps_to_exploit = (
+            int(updates_to_success)
+            if updates_to_success is not None
+            else None
+        )
+
+        if success and steps_to_exploit is not None:
+            status = "exploit_found"
+            steps_lower_bound = int(steps_to_exploit)
+            found_steps.append(int(steps_to_exploit))
+        elif updates_budget is not None and attack_updates_done >= updates_budget:
+            status = "not_found_within_budget"
+            steps_lower_bound = int(updates_budget)
+        else:
+            status = "incomplete"
+            steps_lower_bound = int(attack_updates_done)
+            incomplete_count += 1
+
+        per_objective[objective] = {
+            "status": status,
+            "success": success,
+            "steps_to_exploit": steps_to_exploit,
+            "steps_to_exploit_or_lower_bound": int(steps_lower_bound),
+            "attack_updates_done": int(attack_updates_done),
+            "updates_budget": updates_budget,
+        }
+
+    median_steps = None
+    if found_steps:
+        sorted_steps = sorted(found_steps)
+        mid = len(sorted_steps) // 2
+        if len(sorted_steps) % 2 == 1:
+            median_steps = int(sorted_steps[mid])
+        else:
+            median_steps = float((sorted_steps[mid - 1] + sorted_steps[mid]) / 2.0)
+
+    return {
+        "enabled": True,
+        "objectives": per_objective,
+        "aggregate": {
+            "num_objectives": len(per_objective),
+            "num_exploits_found": len(found_steps),
+            "all_exploits_found": (
+                len(found_steps) == len(per_objective) and len(per_objective) > 0
+            ),
+            "any_incomplete": bool(incomplete_count > 0),
+            "min_steps_to_exploit": min(found_steps) if found_steps else None,
+            "median_steps_to_exploit": median_steps,
+        },
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified PMV evaluation")
     parser.add_argument("config", help="Path to config YAML")
@@ -766,6 +859,25 @@ def main():
     parser.set_defaults(balanced_roles=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=str, default="results/evaluation.json")
+    parser.add_argument(
+        "--eval-stage",
+        choices=["full", "core", "kirchner", "bestofn"],
+        default="full",
+        help=(
+            "Evaluation stage to run. "
+            "full=everything, core=probe/diversity/adversarial only, "
+            "kirchner=Kirchner suite only, bestofn=balanced best-of-n only."
+        ),
+    )
+    parser.add_argument(
+        "--base-result",
+        type=str,
+        default=None,
+        help=(
+            "Existing evaluation JSON to update for staged runs. "
+            "Required for kirchner/bestofn stage if you want a merged paper-ready artifact."
+        ),
+    )
     parser.add_argument("--temperatures", type=float, nargs="+", default=[0.3, 0.5, 0.7, 1.0, 1.2])
     parser.add_argument(
         "--decision-threshold",
@@ -1006,6 +1118,25 @@ def main():
         if args.fool_threshold is not None
         else train_cfg.get("sneaky_fool_threshold", oversight_decision_threshold)
     )
+    run_core = args.eval_stage in {"full", "core"}
+    run_kirchner_stage = args.eval_stage in {"full", "kirchner"}
+    run_bestofn_stage = args.eval_stage in {"full", "bestofn"}
+
+    base_result: Dict[str, Any] = {}
+    if args.base_result:
+        base_path = Path(args.base_result)
+        if not base_path.exists():
+            raise FileNotFoundError(f"Base result not found: {base_path}")
+        with open(base_path) as f:
+            loaded_base = json.load(f)
+        if not isinstance(loaded_base, dict):
+            raise ValueError(f"Base result must be a JSON object: {base_path}")
+        base_result = loaded_base
+    elif args.eval_stage in {"kirchner", "bestofn"}:
+        raise ValueError(
+            f"--base-result is required for --eval-stage={args.eval_stage} "
+            "to preserve previously computed core metrics."
+        )
 
     if args.dataset == "zebra":
         from pmv.zebra_logic import ZebraLogicDataset
@@ -1048,99 +1179,111 @@ def main():
         print(f"Loading checkpoint: {checkpoint_used}")
         load_checkpoint(checkpoint_used, ensemble=ensemble, prover=prover, strict=False)
 
-    print("\nCollecting probe metrics...")
-    probe = collect_probe_metrics(
-        prover=prover,
-        ensemble=ensemble,
-        dataset=dataset,
-        config=config,
-        num_episodes=args.probe_episodes,
-        balanced_roles=args.balanced_roles,
-        max_new_tokens_override=args.probe_max_new_tokens,
-        oversight_decision_threshold=oversight_decision_threshold,
-        verifier_decision_threshold=verifier_decision_threshold,
-        fool_threshold=fool_threshold,
-        dataset_type=dataset_type,
-        save_records=bool(args.save_probe_records),
-    )
-    raw = probe["raw"]
-
-    print("\nComputing diversity + oversight quality metrics...")
-    num_verifiers = model_cfg.get("num_verifiers", 3)
-    score_variance = compute_score_variance(raw["all_verifier_scores"])
-    error_divergence = compute_error_pattern_divergence(raw["verifier_correct"], num_verifiers)
-    try:
-        rank_correlation = compute_rank_correlation(raw["all_verifier_scores"], num_verifiers)
-    except Exception:
-        rank_correlation = {"mean_kendall_tau": None, "pairwise_tau": {}}
-    conditional_independence = compute_conditional_independence(raw["verifier_correct"], num_verifiers)
-    minority_detection = compute_minority_detection_rate(
-        raw["verifier_correct"], raw["oversight_correct"], num_verifiers
-    )
-    oversight_quality = compute_oversight_quality(
-        raw["oversight_scores"],
-        raw["correctness_labels"],
-        decision_threshold=oversight_decision_threshold,
-        fool_threshold=fool_threshold,
-    )
-    goal_robustness = compute_goal_robustness_profile(
-        oversight_scores=raw["oversight_scores"],
-        correctness_labels=raw["correctness_labels"],
-        roles=raw.get("roles", []),
-        center_threshold=fool_threshold,
-        threshold_min=args.robustness_threshold_min,
-        threshold_max=args.robustness_threshold_max,
-        threshold_step=args.robustness_threshold_step,
-    )
-
+    probe = {}
+    oversight_quality = {}
+    goal_robustness = {}
+    score_variance = {}
+    error_divergence = {}
+    rank_correlation = {"mean_kendall_tau": None, "pairwise_tau": {}}
+    conditional_independence = {}
+    minority_detection = {}
     per_verifier_accuracy = {}
-    for v_id in range(num_verifiers):
-        cvec = raw["verifier_correct"].get(v_id, [])
-        per_verifier_accuracy[f"verifier_{v_id}"] = sum(cvec) / max(len(cvec), 1)
-
     adversarial = {}
-    if args.skip_adversarial:
-        print("\nSkipping adversarial tests (--skip-adversarial).")
-        adversarial = {
-            "sneaky_fool_rate": {},
-            "consensus_manipulation": {},
-            "score_distribution": {},
-        }
-    else:
-        print("\nRunning adversarial tests...")
-        adv_fool_thresholds = _build_threshold_grid(
-            t_min=args.robustness_threshold_min,
-            t_max=args.robustness_threshold_max,
-            t_step=args.robustness_threshold_step,
-        )
-        adversarial["sneaky_fool_rate"] = test_sneaky_fool_rate(
-            prover,
-            ensemble,
-            dataset,
-            num_episodes=args.attack_episodes,
-            temperatures=args.temperatures,
-            max_new_tokens=args.attack_max_new_tokens,
-            progress_every=max(10, args.attack_episodes // 6),
+
+    if run_core:
+        print("\nCollecting probe metrics...")
+        probe = collect_probe_metrics(
+            prover=prover,
+            ensemble=ensemble,
+            dataset=dataset,
+            config=config,
+            num_episodes=args.probe_episodes,
+            balanced_roles=args.balanced_roles,
+            max_new_tokens_override=args.probe_max_new_tokens,
+            oversight_decision_threshold=oversight_decision_threshold,
+            verifier_decision_threshold=verifier_decision_threshold,
             fool_threshold=fool_threshold,
-            fool_thresholds=adv_fool_thresholds,
             dataset_type=dataset_type,
+            save_records=bool(args.save_probe_records),
         )
-        adversarial["consensus_manipulation"] = test_consensus_manipulation(
-            ensemble, dataset, num_episodes=args.attack_episodes
+        raw = probe["raw"]
+
+        print("\nComputing diversity + oversight quality metrics...")
+        num_verifiers = model_cfg.get("num_verifiers", 3)
+        score_variance = compute_score_variance(raw["all_verifier_scores"])
+        error_divergence = compute_error_pattern_divergence(raw["verifier_correct"], num_verifiers)
+        try:
+            rank_correlation = compute_rank_correlation(raw["all_verifier_scores"], num_verifiers)
+        except Exception:
+            rank_correlation = {"mean_kendall_tau": None, "pairwise_tau": {}}
+        conditional_independence = compute_conditional_independence(raw["verifier_correct"], num_verifiers)
+        minority_detection = compute_minority_detection_rate(
+            raw["verifier_correct"], raw["oversight_correct"], num_verifiers
         )
-        adversarial["score_distribution"] = test_score_distribution(
-            prover,
-            ensemble,
-            dataset,
-            num_episodes=args.attack_episodes,
-            max_new_tokens=args.attack_max_new_tokens,
-            progress_every=max(10, args.attack_episodes // 6),
-            dataset_type=dataset_type,
+        oversight_quality = compute_oversight_quality(
+            raw["oversight_scores"],
+            raw["correctness_labels"],
+            decision_threshold=oversight_decision_threshold,
+            fool_threshold=fool_threshold,
         )
+        goal_robustness = compute_goal_robustness_profile(
+            oversight_scores=raw["oversight_scores"],
+            correctness_labels=raw["correctness_labels"],
+            roles=raw.get("roles", []),
+            center_threshold=fool_threshold,
+            threshold_min=args.robustness_threshold_min,
+            threshold_max=args.robustness_threshold_max,
+            threshold_step=args.robustness_threshold_step,
+        )
+
+        for v_id in range(num_verifiers):
+            cvec = raw["verifier_correct"].get(v_id, [])
+            per_verifier_accuracy[f"verifier_{v_id}"] = sum(cvec) / max(len(cvec), 1)
+
+        if args.skip_adversarial:
+            print("\nSkipping adversarial tests (--skip-adversarial).")
+            adversarial = {
+                "sneaky_fool_rate": {},
+                "consensus_manipulation": {},
+                "score_distribution": {},
+            }
+        else:
+            print("\nRunning adversarial tests...")
+            adv_fool_thresholds = _build_threshold_grid(
+                t_min=args.robustness_threshold_min,
+                t_max=args.robustness_threshold_max,
+                t_step=args.robustness_threshold_step,
+            )
+            adversarial["sneaky_fool_rate"] = test_sneaky_fool_rate(
+                prover,
+                ensemble,
+                dataset,
+                num_episodes=args.attack_episodes,
+                temperatures=args.temperatures,
+                max_new_tokens=args.attack_max_new_tokens,
+                progress_every=max(10, args.attack_episodes // 6),
+                fool_threshold=fool_threshold,
+                fool_thresholds=adv_fool_thresholds,
+                dataset_type=dataset_type,
+            )
+            adversarial["consensus_manipulation"] = test_consensus_manipulation(
+                ensemble, dataset, num_episodes=args.attack_episodes
+            )
+            adversarial["score_distribution"] = test_score_distribution(
+                prover,
+                ensemble,
+                dataset,
+                num_episodes=args.attack_episodes,
+                max_new_tokens=args.attack_max_new_tokens,
+                progress_every=max(10, args.attack_episodes // 6),
+                dataset_type=dataset_type,
+            )
+    else:
+        print(f"\nSkipping core probe/diversity/adversarial for eval stage '{args.eval_stage}'.")
 
     kirchner_attack = {}
     kirchner_resume_dir = None
-    if args.kirchner_attack_resume_enable and (
+    if run_kirchner_stage and args.kirchner_attack_resume_enable and (
         args.enable_kirchner_attack or args.enable_kirchner_attack_suite
     ):
         kirchner_resume_dir = args.kirchner_attack_resume_dir
@@ -1152,7 +1295,7 @@ def main():
         os.makedirs(kirchner_resume_dir, exist_ok=True)
         print(f"Using Kirchner attack resume dir: {kirchner_resume_dir}")
 
-    if args.enable_kirchner_attack:
+    if run_kirchner_stage and args.enable_kirchner_attack:
         print("\nRunning dedicated attacker training (Kirchner-style exploitability)...")
         kirchner_attack = run_kirchner_style_attack_training(
             prover=prover,
@@ -1174,7 +1317,7 @@ def main():
         )
 
     kirchner_attack_suite = {}
-    if args.enable_kirchner_attack_suite:
+    if run_kirchner_stage and args.enable_kirchner_attack_suite:
         print("\nRunning Kirchner dedicated attack suite (SRC/CGC/goodhart)...")
         kirchner_attack_suite = run_kirchner_attack_suite(
             prover=prover,
@@ -1198,9 +1341,12 @@ def main():
             resume_enable=args.kirchner_attack_resume_enable,
             resume_dir=kirchner_resume_dir,
         )
+    kirchner_steps_to_exploit = build_kirchner_steps_to_exploit_summary(
+        kirchner_attack_suite
+    )
 
     balanced_bestofn = {}
-    if args.enable_balanced_bestofn:
+    if run_bestofn_stage and args.enable_balanced_bestofn:
         print("\nRunning balanced best-of-n diagnostic...")
         bestofn_resume_path = None
         if args.bestofn_resume_enable:
@@ -1238,116 +1384,132 @@ def main():
         "min_format_compliance": args.min_format_compliance,
         "max_malformed_final_rate": args.max_malformed_final_rate,
     }
-    scorecard = build_scorecard(
-        probe_rates=probe["rates"],
-        oversight_quality=oversight_quality,
-        adversarial_results=adversarial,
-        per_verifier_accuracy=per_verifier_accuracy,
-        thresholds=thresholds,
-    )
+    scorecard = {}
+    if run_core:
+        scorecard = build_scorecard(
+            probe_rates=probe["rates"],
+            oversight_quality=oversight_quality,
+            adversarial_results=adversarial,
+            per_verifier_accuracy=per_verifier_accuracy,
+            thresholds=thresholds,
+        )
 
-    result = {
-        "run_metadata": {
+    result = dict(base_result)
+    existing_meta = result.get("run_metadata", {})
+    if not isinstance(existing_meta, dict):
+        existing_meta = {}
+    existing_meta.update(
+        {
             "job_id": os.environ.get("LSB_JOBID", "local"),
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "config_stem": Path(args.config).stem,
             "ablation_id": args.ablation_id or train_cfg.get("ablation_id", Path(args.config).stem),
             "ablation_tag": os.environ.get("ABLATION_TAG"),
-        },
-        "config_snapshot": {
-            "prover_model": model_cfg.get("prover_model"),
-            "verifier_model": model_cfg.get("verifier_model"),
-            "use_quantization": bool(model_cfg.get("use_quantization", True)),
-            "num_verifiers": model_cfg.get("num_verifiers", 3),
-            "oversight_rule": train_cfg.get("oversight_rule", "supervised"),
-            "phase1_stratified_batches": bool(train_cfg.get("phase1_stratified_batches", False)),
-            "phase1_balance_labels": bool(train_cfg.get("phase1_balance_labels", False)),
-            "helpful_warmup_steps": int(train_cfg.get("helpful_warmup_steps", 0)),
-            "oversight_decision_threshold": oversight_decision_threshold,
-            "verifier_decision_threshold": verifier_decision_threshold,
-            "fool_threshold": fool_threshold,
-            "dataset_mode": args.dataset,
-            "resolved_dataset": dataset.__class__.__name__,
-        },
-        "config": args.config,
-        "checkpoint_used": checkpoint_used,
-        "probe_metrics": {
+            "eval_stage": args.eval_stage,
+        }
+    )
+    result["run_metadata"] = existing_meta
+    result["config_snapshot"] = {
+        "prover_model": model_cfg.get("prover_model"),
+        "verifier_model": model_cfg.get("verifier_model"),
+        "use_quantization": bool(model_cfg.get("use_quantization", True)),
+        "num_verifiers": model_cfg.get("num_verifiers", 3),
+        "oversight_rule": train_cfg.get("oversight_rule", "supervised"),
+        "phase1_stratified_batches": bool(train_cfg.get("phase1_stratified_batches", False)),
+        "phase1_balance_labels": bool(train_cfg.get("phase1_balance_labels", False)),
+        "helpful_warmup_steps": int(train_cfg.get("helpful_warmup_steps", 0)),
+        "oversight_decision_threshold": oversight_decision_threshold,
+        "verifier_decision_threshold": verifier_decision_threshold,
+        "fool_threshold": fool_threshold,
+        "dataset_mode": args.dataset,
+        "resolved_dataset": dataset.__class__.__name__,
+    }
+    result["config"] = args.config
+    result["checkpoint_used"] = checkpoint_used
+
+    if run_core:
+        result["probe_metrics"] = {
             "counts": probe["counts"],
             "rates": probe["rates"],
-        },
-        "oversight_quality": oversight_quality,
-        "diversity_metrics": {
+        }
+        result["oversight_quality"] = oversight_quality
+        result["diversity_metrics"] = {
             "score_variance": score_variance,
             "error_divergence": error_divergence,
             "rank_correlation": rank_correlation,
             "conditional_independence": conditional_independence,
             "minority_detection": minority_detection,
-        },
-        "per_verifier_accuracy": per_verifier_accuracy,
-        "adversarial_tests": adversarial,
-        "kirchner_attack_training": kirchner_attack,
-        "kirchner_attack_suite": kirchner_attack_suite,
-        "balanced_best_of_n": balanced_bestofn,
-        "goal_robustness": goal_robustness,
-        "scorecard": scorecard,
-    }
-    if args.save_probe_records:
-        result["probe_records"] = probe.get("records", [])
+        }
+        result["per_verifier_accuracy"] = per_verifier_accuracy
+        result["adversarial_tests"] = adversarial
+        result["goal_robustness"] = goal_robustness
+        result["scorecard"] = scorecard
+        if args.save_probe_records:
+            result["probe_records"] = probe.get("records", [])
+
+    if run_kirchner_stage:
+        result["kirchner_attack_training"] = kirchner_attack
+        result["kirchner_attack_suite"] = kirchner_attack_suite
+        result["kirchner_steps_to_exploit"] = kirchner_steps_to_exploit
+    if run_bestofn_stage:
+        result["balanced_best_of_n"] = balanced_bestofn
 
     print("\nEvaluation summary:")
+    print(f"  Eval stage: {args.eval_stage}")
     print(f"  Oversight decision threshold: {oversight_decision_threshold:.3f}")
     print(f"  Verifier decision threshold: {verifier_decision_threshold:.3f}")
     print(f"  Fool threshold: {fool_threshold:.3f}")
     if checkpoint_used is not None:
         print(f"  Checkpoint: {checkpoint_used}")
-    print(f"  Helpful correctness: {probe['rates']['helpful_correctness']:.3f}")
-    print(f"  Sneaky incorrect rate: {probe['rates']['sneaky_incorrect_rate']:.3f}")
-    print(
-        "  FINAL parse audit:"
-        f" malformed_before_fix={probe['rates'].get('final_malformed_before_fix_rate', 0.0):.3f},"
-        f" parse_rescued={probe['rates'].get('parse_rescued_by_canonicalization_rate', 0.0):.3f},"
-        f" flipped_to_correct={probe['rates'].get('correctness_flipped_to_correct_rate', 0.0):.3f}"
-    )
-    fool_k = next((k for k in probe["rates"] if k.startswith("sneaky_fool_rate@")), None)
-    if fool_k:
-        print(f"  {fool_k}: {probe['rates'][fool_k]:.3f}")
-    cond_fool_k = next((k for k in probe["rates"] if k.startswith("sneaky_conditional_fool_rate@")), None)
-    if cond_fool_k:
-        print(f"  {cond_fool_k}: {probe['rates'][cond_fool_k]:.3f}")
-    avg_c = oversight_quality.get("avg_correct_score")
-    avg_i = oversight_quality.get("avg_incorrect_score")
-    if avg_c is not None:
-        print(f"  Avg score (correct): {avg_c:.3f}")
-    if avg_i is not None:
-        print(f"  Avg score (incorrect): {avg_i:.3f}")
-    if oversight_quality.get("separation") is None:
-        print("  Oversight separation: undefined (no correct or no incorrect samples in probe set)")
-    else:
-        sep = oversight_quality["separation"]
-        print(f"  Oversight separation: {sep:.3f}")
-        if avg_c is not None and avg_c < 0.4 and avg_i is not None and avg_i < 0.4:
-            print("  *** SCORE COLLAPSE WARNING: both correct and incorrect scores are below 0.4."
-                  " Fool rate results are not meaningful — verifier may reject everything. ***")
-    print(f"  Approx soundness (P(f<=0.1|incorrect)): {oversight_quality.get('approx_soundness_eps_0.1', 'N/A')}")
-    print(
-        f"  Probe label coverage: correct={oversight_quality.get('n_correct', 0)}, "
-        f"incorrect={oversight_quality.get('n_incorrect', 0)}"
-    )
-    gr = goal_robustness.get("summary", {})
-    auroc = gr.get("auroc_correct_vs_incorrect")
-    if auroc is None:
-        print("  Goal robustness AUROC(correct vs incorrect): undefined")
-    else:
-        print(f"  Goal robustness AUROC(correct vs incorrect): {auroc:.3f}")
-    cf = gr.get("center_sneaky_conditional_fool_rate")
-    if cf is not None:
-        print(f"  Center sneaky conditional fool rate: {cf:.3f}")
-    hc = gr.get("center_helpful_correct_accept_rate")
-    if hc is not None:
-        print(f"  Center helpful-correct accept rate: {hc:.3f}")
-    sens = (gr.get("sensitivity_band_range_pm0.02") or {}).get("sneaky_conditional_fool_rate")
-    if sens is not None:
-        print(f"  Threshold sensitivity (sneaky fool, +/-0.02): {sens:.3f}")
+    if run_core:
+        print(f"  Helpful correctness: {probe['rates']['helpful_correctness']:.3f}")
+        print(f"  Sneaky incorrect rate: {probe['rates']['sneaky_incorrect_rate']:.3f}")
+        print(
+            "  FINAL parse audit:"
+            f" malformed_before_fix={probe['rates'].get('final_malformed_before_fix_rate', 0.0):.3f},"
+            f" parse_rescued={probe['rates'].get('parse_rescued_by_canonicalization_rate', 0.0):.3f},"
+            f" flipped_to_correct={probe['rates'].get('correctness_flipped_to_correct_rate', 0.0):.3f}"
+        )
+        fool_k = next((k for k in probe["rates"] if k.startswith("sneaky_fool_rate@")), None)
+        if fool_k:
+            print(f"  {fool_k}: {probe['rates'][fool_k]:.3f}")
+        cond_fool_k = next((k for k in probe["rates"] if k.startswith("sneaky_conditional_fool_rate@")), None)
+        if cond_fool_k:
+            print(f"  {cond_fool_k}: {probe['rates'][cond_fool_k]:.3f}")
+        avg_c = oversight_quality.get("avg_correct_score")
+        avg_i = oversight_quality.get("avg_incorrect_score")
+        if avg_c is not None:
+            print(f"  Avg score (correct): {avg_c:.3f}")
+        if avg_i is not None:
+            print(f"  Avg score (incorrect): {avg_i:.3f}")
+        if oversight_quality.get("separation") is None:
+            print("  Oversight separation: undefined (no correct or no incorrect samples in probe set)")
+        else:
+            sep = oversight_quality["separation"]
+            print(f"  Oversight separation: {sep:.3f}")
+            if avg_c is not None and avg_c < 0.4 and avg_i is not None and avg_i < 0.4:
+                print("  *** SCORE COLLAPSE WARNING: both correct and incorrect scores are below 0.4."
+                      " Fool rate results are not meaningful — verifier may reject everything. ***")
+        print(f"  Approx soundness (P(f<=0.1|incorrect)): {oversight_quality.get('approx_soundness_eps_0.1', 'N/A')}")
+        print(
+            f"  Probe label coverage: correct={oversight_quality.get('n_correct', 0)}, "
+            f"incorrect={oversight_quality.get('n_incorrect', 0)}"
+        )
+        gr = goal_robustness.get("summary", {})
+        auroc = gr.get("auroc_correct_vs_incorrect")
+        if auroc is None:
+            print("  Goal robustness AUROC(correct vs incorrect): undefined")
+        else:
+            print(f"  Goal robustness AUROC(correct vs incorrect): {auroc:.3f}")
+        cf = gr.get("center_sneaky_conditional_fool_rate")
+        if cf is not None:
+            print(f"  Center sneaky conditional fool rate: {cf:.3f}")
+        hc = gr.get("center_helpful_correct_accept_rate")
+        if hc is not None:
+            print(f"  Center helpful-correct accept rate: {hc:.3f}")
+        sens = (gr.get("sensitivity_band_range_pm0.02") or {}).get("sneaky_conditional_fool_rate")
+        if sens is not None:
+            print(f"  Threshold sensitivity (sneaky fool, +/-0.02): {sens:.3f}")
     if kirchner_attack:
         k_succ = kirchner_attack.get("success")
         k_steps = kirchner_attack.get("updates_to_success")
@@ -1364,14 +1526,45 @@ def main():
             f"all_success={ks.get('all_success')}, "
             f"min_updates_to_success={ks.get('min_updates_to_success')}"
         )
+    kte_objectives = (kirchner_steps_to_exploit.get("objectives") or {})
+    if kte_objectives:
+        print("  Kirchner steps-to-exploit:")
+        for objective in sorted(kte_objectives.keys()):
+            vals = kte_objectives.get(objective) or {}
+            status = vals.get("status")
+            if vals.get("steps_to_exploit") is not None:
+                print(
+                    f"    {objective}: {vals.get('steps_to_exploit')} updates "
+                    "(exploit found)"
+                )
+            elif status == "not_found_within_budget":
+                print(
+                    f"    {objective}: >={vals.get('updates_budget')} updates "
+                    "(no exploit within budget)"
+                )
+            else:
+                print(
+                    f"    {objective}: >={vals.get('attack_updates_done')} updates "
+                    "(incomplete run)"
+                )
     if balanced_bestofn:
         per_n = (balanced_bestofn.get("per_n") or {})
         if per_n:
             n_max = max(per_n.keys(), key=lambda x: int(x))
             n_max_acc = (per_n.get(n_max) or {}).get("accuracy")
             print(f"  Balanced best-of-n (max n={n_max}) accuracy: {n_max_acc}")
-    print(f"  Binary accuracy: {oversight_quality['binary_accuracy']:.3f}")
-    print(f"  Overall pass: {scorecard['checks']['overall_pass']}")
+    if run_core:
+        print(f"  Binary accuracy: {oversight_quality['binary_accuracy']:.3f}")
+        print(f"  Overall pass: {scorecard['checks']['overall_pass']}")
+    else:
+        prior_oq = result.get("oversight_quality", {})
+        prior_sc = result.get("scorecard", {})
+        if isinstance(prior_oq, dict) and prior_oq.get("binary_accuracy") is not None:
+            print(f"  Binary accuracy (from base result): {prior_oq.get('binary_accuracy'):.3f}")
+        if isinstance(prior_sc, dict):
+            checks = prior_sc.get("checks", {})
+            if isinstance(checks, dict) and "overall_pass" in checks:
+                print(f"  Overall pass (from base result): {checks.get('overall_pass')}")
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w") as f:

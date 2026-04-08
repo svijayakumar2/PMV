@@ -7,6 +7,7 @@
 #BSUB -o /u/saranyaibm2/.lsbatch/%J.out
 #BSUB -e /u/saranyaibm2/.lsbatch/%J.err
 #BSUB -W 12:00
+#BSUB -env "all"
 
 set -euo pipefail
 
@@ -54,6 +55,17 @@ echo "Config: ${CONFIG_PATH}"
 echo ""
 
 cd "${REPO_ROOT}" || exit 1
+
+if [ ! -f "${CONFIG_PATH}" ]; then
+  echo "FAILED: config not found: ${CONFIG_PATH}" >&2
+  echo "Hint: REPO_ROOT should be the parent directory that contains pmv/." >&2
+  exit 1
+fi
+if ! python3 -u -m pmv.main -h >/dev/null 2>&1; then
+  echo "FAILED: cannot import pmv.main from REPO_ROOT=${REPO_ROOT}" >&2
+  echo "Hint: REPO_ROOT must point to the directory that contains pmv/." >&2
+  exit 1
+fi
 
 python3 -u -m pmv.main "${CONFIG_PATH}"
 
