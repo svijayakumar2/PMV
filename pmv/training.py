@@ -351,7 +351,7 @@ def train_phase1(
     replay_buffer: ReplayBuffer,
     config: Dict,
     round_idx: int,
-) -> float:
+) -> Tuple[float, float]:
     """
     NashUpdate (Algorithm 3): train verifiers + aggregator jointly on replay buffer
     using Bradley-Terry pairwise ranking loss on same-problem (correct, incorrect) pairs.
@@ -391,10 +391,10 @@ def train_phase1(
     """
     oversight_rule = config.get("training", {}).get("oversight_rule", "supervised")
     if oversight_rule == "pe_min" and ensemble.use_learned_aggregator:
-        return _train_pe_min_two_phase(ensemble, replay_buffer, config)
+        return _train_pe_min_two_phase(ensemble, replay_buffer, config, round_idx)
 
     if len(replay_buffer) < 10:
-        return float("inf")
+        return float("inf"), float("nan")
 
     train_cfg = config["training"]
     lr = float(train_cfg.get("verifier_lr", 1e-4))
@@ -411,6 +411,9 @@ def train_phase1(
     bt_verifier_temperature = float(train_cfg.get("bt_verifier_temperature", bt_temperature))
     bt_accumulate_steps = max(1, int(train_cfg.get("bt_accumulate_steps", 8)))
     bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 4)))
+    phase1_val_split = float(train_cfg.get("phase1_val_split", 0.1))
+    phase1_val_min_pairs = max(0, int(train_cfg.get("phase1_val_min_pairs", 8)))
+    phase1_val_seed = int(config.get("seed", 0)) + (int(round_idx) * 997)
 
     records = replay_buffer.get_all()
     pairs = _build_bt_pairs(
@@ -418,6 +421,21 @@ def train_phase1(
         max_pairs_per_problem=bt_max_pairs_per_problem,
         prioritize_hard_negatives=bt_hard_negative_pairs,
     )
+
+    train_pairs = list(pairs)
+    val_pairs: List[Tuple[SolutionRecord, SolutionRecord]] = []
+    if (
+        phase1_val_split > 0.0
+        and phase1_val_split < 1.0
+        and len(train_pairs) >= 2
+    ):
+        rng = random.Random(phase1_val_seed)
+        rng.shuffle(train_pairs)
+        n_val = max(phase1_val_min_pairs, int(round(len(train_pairs) * phase1_val_split)))
+        n_val = min(n_val, len(train_pairs) - 1)
+        if n_val > 0:
+            val_pairs = train_pairs[:n_val]
+            train_pairs = train_pairs[n_val:]
 
     print(f"\n{'─'*60}")
     print(f"PHASE 1: NASH UPDATE (Bradley-Terry pairwise)")
@@ -427,30 +445,39 @@ def train_phase1(
         f"m={bt_margin}, λ_margin={bt_margin_lambda}, "
         f"λ_anchor={bt_anchor_lambda}, λ_vaux={bt_verifier_aux_lambda})"
     )
+    if val_pairs:
+        print(
+            f"  Phase-1 split: train_pairs={len(train_pairs)}, "
+            f"val_pairs={len(val_pairs)} (split={phase1_val_split:.2f})"
+        )
     print(f"{'─'*60}")
 
     if not pairs:
         print("  No same-problem pairs in buffer; skipping Phase 1.")
         print("  Ensure collect_paired_roles=true in config.")
-        return float("inf")
+        return float("inf"), float("nan")
+    if not train_pairs:
+        print("  No training pairs left after validation split; skipping Phase 1.")
+        return float("inf"), float("nan")
 
     ensemble.unfreeze_all()
     all_params = ensemble.get_all_trainable_params()
     if not all_params:
         print("  No trainable parameters.")
-        return float("inf")
+        return float("inf"), float("nan")
 
     optimizer = torch.optim.AdamW(all_params, lr=lr, weight_decay=0.01)
     final_loss = float("inf")
+    final_val_loss = float("nan")
 
     for epoch in range(epochs):
-        random.shuffle(pairs)
+        random.shuffle(train_pairs)
         epoch_loss, n_updates = 0.0, 0
         accum_loss = torch.tensor(0.0, device=ensemble.aggregator_device, requires_grad=False)
         accum_valid = 0
         optimizer.zero_grad()
 
-        for pair_idx, (c_rec, i_rec) in enumerate(pairs):
+        for pair_idx, (c_rec, i_rec) in enumerate(train_pairs):
             try:
                 # Forward: correct answer on this problem
                 s_correct, f_correct = ensemble.compute_oversight_score_training(
@@ -514,7 +541,7 @@ def train_phase1(
                 print(f"  Pair error: {e}")
                 continue
 
-            is_last = pair_idx == len(pairs) - 1
+            is_last = pair_idx == len(train_pairs) - 1
             if accum_valid > 0 and (((pair_idx + 1) % bt_accumulate_steps == 0) or is_last):
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
@@ -530,16 +557,72 @@ def train_phase1(
             avg = epoch_loss / n_updates
             print(f"  Epoch {epoch+1}/{epochs}, BT loss: {avg:.4f}")
             final_loss = avg
+        if val_pairs:
+            with torch.no_grad():
+                val_sum, val_n = 0.0, 0
+                for c_rec, i_rec in val_pairs:
+                    try:
+                        s_correct, f_correct = ensemble.compute_oversight_score_training(
+                            c_rec.problem, c_rec.response, "",
+                        )
+                        s_incorrect, f_incorrect = ensemble.compute_oversight_score_training(
+                            i_rec.problem, i_rec.response, "",
+                        )
+
+                        delta = (f_correct - f_incorrect)
+                        bt_loss = -F.logsigmoid(bt_temperature * delta)
+                        centering = bt_centering_lambda * (
+                            (f_correct - 0.5).pow(2) + (f_incorrect - 0.5).pow(2)
+                        )
+
+                        margin_loss = torch.zeros_like(bt_loss)
+                        if bt_margin_lambda > 0.0 and bt_margin > 0.0:
+                            margin_loss = bt_margin_lambda * F.relu(bt_margin - delta).pow(2)
+
+                        anchor_loss = torch.zeros_like(bt_loss)
+                        if bt_anchor_lambda > 0.0:
+                            anchor_loss = bt_anchor_lambda * (
+                                (f_correct - bt_target_correct).pow(2)
+                                + (f_incorrect - bt_target_incorrect).pow(2)
+                            )
+
+                        verifier_aux = torch.zeros_like(bt_loss)
+                        if (
+                            bt_verifier_aux_lambda > 0.0
+                            and len(s_correct) == len(s_incorrect)
+                            and len(s_correct) > 0
+                        ):
+                            per_verifier_bt = []
+                            for sc, si in zip(s_correct, s_incorrect):
+                                per_verifier_bt.append(
+                                    -F.logsigmoid(bt_verifier_temperature * (sc - si))
+                                )
+                            verifier_aux = bt_verifier_aux_lambda * torch.stack(per_verifier_bt).mean()
+
+                        v_loss = bt_loss + centering + margin_loss + anchor_loss + verifier_aux
+                        if torch.isnan(v_loss) or torch.isinf(v_loss):
+                            continue
+                        val_sum += float(v_loss.item())
+                        val_n += 1
+                    except Exception:
+                        continue
+                if val_n > 0:
+                    final_val_loss = val_sum / val_n
+                    print(
+                        f"  Epoch {epoch+1}/{epochs}, BT val loss: {final_val_loss:.4f} "
+                        f"(n={val_n})"
+                    )
 
     ensemble.freeze_all()
-    return final_loss
+    return final_loss, final_val_loss
 
 
 def _train_pe_min_two_phase(
     ensemble: VerifierEnsemble,
     replay_buffer: ReplayBuffer,
     config: Dict,
-) -> float:
+    round_idx: int,
+) -> Tuple[float, float]:
     """
     Proper two-phase PE-Min training (Algorithm 1, Kirchner et al.):
 
@@ -552,7 +635,7 @@ def _train_pe_min_two_phase(
         Gradient flows through the frozen aggregator function to verifier params.
     """
     if len(replay_buffer) < 10:
-        return float("inf")
+        return float("inf"), float("nan")
 
     train_cfg = config["training"]
     lr = float(train_cfg.get("verifier_lr", 1e-4))
@@ -562,13 +645,35 @@ def _train_pe_min_two_phase(
     bt_max_pairs_per_problem = max(1, int(train_cfg.get("bt_max_pairs_per_problem", 8)))
     bt_hard_negative_pairs = bool(train_cfg.get("bt_hard_negative_pairs", True))
     bt_accumulate_steps = max(1, int(train_cfg.get("bt_accumulate_steps", 8)))
+    phase1_val_split = float(train_cfg.get("phase1_val_split", 0.1))
+    phase1_val_min_pairs = max(0, int(train_cfg.get("phase1_val_min_pairs", 8)))
+    phase1_val_seed = int(config.get("seed", 0)) + (int(round_idx) * 997)
     agg_device = ensemble.aggregator_device
     records = replay_buffer.get_all()
+    train_records = list(records)
+    val_records: List[SolutionRecord] = []
+    if (
+        phase1_val_split > 0.0
+        and phase1_val_split < 1.0
+        and len(train_records) >= 2
+    ):
+        rng = random.Random(phase1_val_seed + 31)
+        rng.shuffle(train_records)
+        n_val_records = max(1, int(round(len(train_records) * phase1_val_split)))
+        n_val_records = min(n_val_records, len(train_records) - 1)
+        if n_val_records > 0:
+            val_records = train_records[:n_val_records]
+            train_records = train_records[n_val_records:]
 
     # ── Phase 1a: reset + train aggregator with H_PE-min ────────────────────
     print(f"\n{'─'*60}")
     print(f"PHASE 1a: PE-Min aggregator training (verifiers frozen)")
     print(f"  {len(records)} buffer records, agg_lr={agg_lr}")
+    if val_records:
+        print(
+            f"  Phase-1a split: train_records={len(train_records)}, "
+            f"val_records={len(val_records)} (split={phase1_val_split:.2f})"
+        )
     print(f"{'─'*60}")
 
     pe_min_reset_aggregator = bool(train_cfg.get("pe_min_reset_aggregator", False))
@@ -583,9 +688,9 @@ def _train_pe_min_two_phase(
     )
 
     for epoch in range(epochs):
-        random.shuffle(records)
+        random.shuffle(train_records)
         epoch_loss, n = 0.0, 0
-        for rec in records:
+        for rec in train_records:
             try:
                 # Use head-based scoring (fast, differentiable-aligned) NOT generation-based.
                 # use_head=True returns sigmoid(score_head(hidden)) without grad.
@@ -616,6 +721,35 @@ def _train_pe_min_two_phase(
                 continue
         avg = epoch_loss / max(1, n)
         print(f"  Agg epoch {epoch+1}/{epochs}, H_PE-min loss: {avg:.4f}")
+        if val_records:
+            with torch.no_grad():
+                val_sum, val_n = 0.0, 0
+                for rec in val_records:
+                    try:
+                        raw_scores = []
+                        for v in ensemble.verifiers:
+                            s = v.compute_score(
+                                rec.problem, rec.response, transcript="",
+                                training=False, use_head=True,
+                            )
+                            raw_scores.append(float(s.item()))
+                        scores_t = torch.tensor(raw_scores, dtype=torch.float32, device=agg_device)
+                        f = ensemble.aggregator(scores_t)
+                        f_exp = f.unsqueeze(0).expand(len(raw_scores))
+                        f_clamped = f_exp.clamp(1e-6, 1 - 1e-6)
+                        per_v = F.binary_cross_entropy(f_clamped, scores_t, reduction="none")
+                        v_loss = per_v.min()
+                        if torch.isnan(v_loss) or torch.isinf(v_loss):
+                            continue
+                        val_sum += float(v_loss.item())
+                        val_n += 1
+                    except Exception:
+                        continue
+                if val_n > 0:
+                    print(
+                        f"  Agg epoch {epoch+1}/{epochs}, H_PE-min val loss: "
+                        f"{(val_sum / val_n):.4f} (n={val_n})"
+                    )
 
     # Freeze aggregator before Phase 1b
     ensemble.aggregator.freeze()
@@ -628,14 +762,37 @@ def _train_pe_min_two_phase(
         max_pairs_per_problem=bt_max_pairs_per_problem,
         prioritize_hard_negatives=bt_hard_negative_pairs,
     )
+    train_pairs = list(pairs)
+    val_pairs: List[Tuple[SolutionRecord, SolutionRecord]] = []
+    if (
+        phase1_val_split > 0.0
+        and phase1_val_split < 1.0
+        and len(train_pairs) >= 2
+    ):
+        rng = random.Random(phase1_val_seed + 53)
+        rng.shuffle(train_pairs)
+        n_val_pairs = max(phase1_val_min_pairs, int(round(len(train_pairs) * phase1_val_split)))
+        n_val_pairs = min(n_val_pairs, len(train_pairs) - 1)
+        if n_val_pairs > 0:
+            val_pairs = train_pairs[:n_val_pairs]
+            train_pairs = train_pairs[n_val_pairs:]
     print(f"  {len(pairs)} same-problem pairs from {len(records)} buffer records "
           f"(τ={bt_temperature})")
+    if val_pairs:
+        print(
+            f"  Phase-1b split: train_pairs={len(train_pairs)}, "
+            f"val_pairs={len(val_pairs)} (split={phase1_val_split:.2f})"
+        )
     print(f"{'─'*60}")
 
     if not pairs:
         print("  No pairs found; skipping Phase 1b.")
         ensemble.freeze_all()
-        return float("inf")
+        return float("inf"), float("nan")
+    if not train_pairs:
+        print("  No training pairs left after validation split; skipping Phase 1b.")
+        ensemble.freeze_all()
+        return float("inf"), float("nan")
 
     for v in ensemble.verifiers:
         v.unfreeze()
@@ -646,15 +803,16 @@ def _train_pe_min_two_phase(
 
     optimizer = torch.optim.AdamW(all_verifier_params, lr=lr, weight_decay=0.01)
     final_loss = float("inf")
+    final_val_loss = float("nan")
 
     for epoch in range(epochs):
-        random.shuffle(pairs)
+        random.shuffle(train_pairs)
         epoch_loss, n_updates = 0.0, 0
         accum_loss = torch.tensor(0.0, device=agg_device)
         accum_valid = 0
         optimizer.zero_grad()
 
-        for pair_idx, (c_rec, i_rec) in enumerate(pairs):
+        for pair_idx, (c_rec, i_rec) in enumerate(train_pairs):
             try:
                 # Gradient flows: verifier params → scores → frozen aggregator fn → f
                 _, f_correct = ensemble.compute_oversight_score_training(
@@ -674,7 +832,7 @@ def _train_pe_min_two_phase(
                 print(f"  [Phase 1b] pair error: {e}")
                 continue
 
-            if (pair_idx + 1) % bt_accumulate_steps == 0 or (pair_idx + 1) == len(pairs):
+            if (pair_idx + 1) % bt_accumulate_steps == 0 or (pair_idx + 1) == len(train_pairs):
                 if accum_valid > 0:
                     torch.nn.utils.clip_grad_norm_(all_verifier_params, max_norm=1.0)
                     optimizer.step()
@@ -686,9 +844,33 @@ def _train_pe_min_two_phase(
 
         final_loss = epoch_loss / max(1, n_updates)
         print(f"  BT epoch {epoch+1}/{epochs}, loss: {final_loss:.4f}")
+        if val_pairs:
+            with torch.no_grad():
+                val_sum, val_n = 0.0, 0
+                for c_rec, i_rec in val_pairs:
+                    try:
+                        _, f_correct = ensemble.compute_oversight_score_training(
+                            c_rec.problem, c_rec.response, ""
+                        )
+                        _, f_incorrect = ensemble.compute_oversight_score_training(
+                            i_rec.problem, i_rec.response, ""
+                        )
+                        bt_loss = -F.logsigmoid(bt_temperature * (f_correct - f_incorrect))
+                        if torch.isnan(bt_loss) or torch.isinf(bt_loss):
+                            continue
+                        val_sum += float(bt_loss.item())
+                        val_n += 1
+                    except Exception:
+                        continue
+                if val_n > 0:
+                    final_val_loss = val_sum / val_n
+                    print(
+                        f"  BT epoch {epoch+1}/{epochs}, val loss: "
+                        f"{final_val_loss:.4f} (n={val_n})"
+                    )
 
     ensemble.freeze_all()
-    return final_loss
+    return final_loss, final_val_loss
 
 
 # ---------------------------------------------------------------------------

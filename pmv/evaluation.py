@@ -911,6 +911,11 @@ def main():
         default=None,
         help="Training checkpoint path (.pt). If omitted, auto-loads config-specific latest checkpoint when present.",
     )
+    parser.add_argument(
+        "--disable-auto-checkpoint",
+        action="store_true",
+        help="Do not auto-load config-specific latest checkpoint when --checkpoint is omitted.",
+    )
 
     parser.add_argument("--min-helpful-correctness", type=float, default=0.35)
     parser.add_argument("--min-sneaky-incorrect-rate", type=float, default=0.50)
@@ -1172,8 +1177,10 @@ def main():
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         checkpoint_used = str(ckpt_path)
-    elif auto_ckpt.exists():
+    elif (not args.disable_auto_checkpoint) and auto_ckpt.exists():
         checkpoint_used = str(auto_ckpt)
+    elif args.disable_auto_checkpoint:
+        print("Auto-checkpoint loading disabled; evaluating model initialization.")
 
     if checkpoint_used is not None:
         print(f"Loading checkpoint: {checkpoint_used}")

@@ -413,6 +413,9 @@ def main(config_path: str = "configs/config.yaml"):
                 f"starting PPO from update {resume_inflight_step}."
             )
             loss = float(resume_inflight_context.get("phase1_loss", float("nan")))
+            phase1_val_loss = float(
+                resume_inflight_context.get("phase1_val_loss", float("nan"))
+            )
             prompts = list(resume_inflight_context.get("prompts", []))
             responses = list(resume_inflight_context.get("responses", []))
             rewards = list(resume_inflight_context.get("rewards", []))
@@ -426,8 +429,10 @@ def main(config_path: str = "configs/config.yaml"):
                 )
         else:
             # Phase 1: Nash update (verifiers + aggregator, Algorithm 3)
-            loss = train_phase1(ensemble, replay_buffer, config, round_idx)
+            loss, phase1_val_loss = train_phase1(ensemble, replay_buffer, config, round_idx)
             print(f"Phase 1 complete. Oversight loss: {loss:.4f}")
+            if phase1_val_loss == phase1_val_loss:
+                print(f"Phase 1 validation loss: {phase1_val_loss:.4f}")
             ensemble.freeze_all()
 
         # Phase 2: Stackelberg (fresh prover, Algorithm 2)
@@ -543,6 +548,9 @@ def main(config_path: str = "configs/config.yaml"):
                 round_history.append({
                     "round": round_idx,
                     "phase1_loss": float(loss) if loss == loss else None,
+                    "phase1_val_loss": (
+                        float(phase1_val_loss) if phase1_val_loss == phase1_val_loss else None
+                    ),
                     "helpful_correctness": helpful_correct / helpful_total if helpful_total > 0 else None,
                     "helpful_correct": helpful_correct,
                     "helpful_total": helpful_total,
@@ -576,6 +584,9 @@ def main(config_path: str = "configs/config.yaml"):
                 config_path=config_path,
                 extra={
                     "phase1_loss": float(loss) if loss == loss else None,  # NaN-safe
+                    "phase1_val_loss": (
+                        float(phase1_val_loss) if phase1_val_loss == phase1_val_loss else None
+                    ),
                     "replay_buffer_records": replay_buffer.get_all(),
                     "prompts": prompts,
                     "responses": responses,

@@ -133,6 +133,29 @@ bsub < /dccstor/principled_ai/users/saranyaibm2/PMV/pmv/scripts/run_comparison_e
 - `fast`: reduced Kirchner + best-of-n budgets (designed to finish much more often in 12h)
 - `full`: strongest settings (can require repeated resume submissions)
 
+## Base-model baselines (no fine-tuning)
+
+To see what the non-fine-tuned model does on the same harness:
+
+```bash
+# Base model on MATH (no checkpoint loaded)
+EXPERIMENT=base_math REPO_ROOT=/dccstor/principled_ai/users/saranyaibm2/PMV \
+bsub < /dccstor/principled_ai/users/saranyaibm2/PMV/pmv/scripts/run_comparison_eval_robustness_2gpu.sh
+
+# Base model on Zebra (no checkpoint loaded)
+EXPERIMENT=base_zebra REPO_ROOT=/dccstor/principled_ai/users/saranyaibm2/PMV \
+bsub < /dccstor/principled_ai/users/saranyaibm2/PMV/pmv/scripts/run_comparison_eval_robustness_2gpu.sh
+```
+
+These base experiments default to `EVAL_STAGE=core` and disable automatic latest-checkpoint loading, so the run is truly "no fine-tuning."
+
+Optional Zebra size override:
+
+```bash
+EXPERIMENT=base_zebra ZEBRA_MAX_SIZE="3*3" REPO_ROOT=/dccstor/principled_ai/users/saranyaibm2/PMV \
+bsub < /dccstor/principled_ai/users/saranyaibm2/PMV/pmv/scripts/run_comparison_eval_robustness_2gpu.sh
+```
+
 ## Important output locations
 
 Comparison study root:

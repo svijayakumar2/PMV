@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 ROUND_RE = re.compile(r"ROUND\s+(\d+)/(\d+)")
 PHASE1_RE = re.compile(r"Phase 1 complete\.\s+Oversight loss:\s+([\-0-9.eE]+)")
+PHASE1_VAL_RE = re.compile(r"Phase 1 validation loss:\s+([\-0-9.eE]+)")
 MEAN_REWARD_RE = re.compile(r"Mean reward:\s+([\-0-9.eE]+)")
 HELPFUL_RE = re.compile(r"Helpful correctness:\s+(\d+)/(\d+)")
 SNEAKY_FOOL_RE = re.compile(r"Sneaky fool rate@([0-9.]+):\s+(\d+)/(\d+)")
@@ -43,6 +44,7 @@ class RoundMetrics:
     round_idx: int
     total_rounds: Optional[int] = None
     phase1_loss: Optional[float] = None
+    phase1_val_loss: Optional[float] = None
     mean_reward: Optional[float] = None
     helpful_correct: Optional[int] = None
     helpful_total: Optional[int] = None
@@ -134,6 +136,10 @@ def parse_log(log_path: Path) -> Dict:
         if m:
             rd.phase1_loss = _to_float(m.group(1))
             continue
+        m = PHASE1_VAL_RE.search(line)
+        if m:
+            rd.phase1_val_loss = _to_float(m.group(1))
+            continue
 
         m = MEAN_REWARD_RE.search(line)
         if m:
@@ -215,6 +221,7 @@ def build_analysis(parsed: Dict) -> List[str]:
         return ["No rounds parsed from this log."]
 
     phase1 = [r.phase1_loss for r in rounds if r.phase1_loss is not None]
+    phase1_val = [r.phase1_val_loss for r in rounds if r.phase1_val_loss is not None]
     helpful = [r.helpful_rate() for r in rounds if r.helpful_rate() is not None]
     fool = [r.sneaky_fool_rate() for r in rounds if r.sneaky_fool_rate() is not None]
     sneaky_incorrect = [r.sneaky_incorrect_rate() for r in rounds if r.sneaky_incorrect_rate() is not None]
@@ -229,6 +236,10 @@ def build_analysis(parsed: Dict) -> List[str]:
     if phase1:
         lines.append(
             f"Oversight loss: start={phase1[0]:.4f}, end={phase1[-1]:.4f}, trend={_trend(phase1)}"
+        )
+    if phase1_val:
+        lines.append(
+            f"Oversight val loss: start={phase1_val[0]:.4f}, end={phase1_val[-1]:.4f}, trend={_trend(phase1_val)}"
         )
     if helpful:
         lines.append(

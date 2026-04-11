@@ -4,7 +4,7 @@ Top-level scripts are the active cluster workflow.
 
 ## Active run scripts
 - `run_comparison_train_2gpu_ddp.sh` (comparison training: `ours_3v`, `ours_1v`, `kirchner_1v_src`, `kirchner_1v_cgc`, `kirchner_1v_goodhart`)
-- `run_comparison_eval_robustness_2gpu.sh` (robustness-heavy eval suite for comparison runs)
+- `run_comparison_eval_robustness_2gpu.sh` (robustness-heavy eval suite for comparison runs; also supports `base_math` / `base_zebra` no-checkpoint baselines)
 - `run_multismall_study.sh` (end-to-end multi-variant PMV loop)
 - `run_multismall_study_math.sh` (end-to-end multi-variant PMV loop on math)
 - `run_multismall_study_math_tuned.sh` (math stabilization pass, affine reward)

@@ -21,8 +21,9 @@ EXPERIMENT=${EXPERIMENT:-ours_3v}
 CONFIG_PATH=${CONFIG_PATH:-}
 CHECKPOINT_PATH=${CHECKPOINT_PATH:-}
 OUTPUT_JSON=${OUTPUT_JSON:-}
+NO_CHECKPOINT=${NO_CHECKPOINT:-0}
 
-if [ -z "${CONFIG_PATH}" ] || [ -z "${CHECKPOINT_PATH}" ] || [ -z "${OUTPUT_JSON}" ]; then
+if [ -z "${CONFIG_PATH}" ] || [ -z "${OUTPUT_JSON}" ] || { [ "${NO_CHECKPOINT}" != "1" ] && [ -z "${CHECKPOINT_PATH}" ]; }; then
   case "${EXPERIMENT}" in
     ours_3v)
       CONFIG_PATH=${CONFIG_PATH:-pmv/configs/experiments/config_comparison_ours_3v.yaml}
@@ -54,8 +55,20 @@ if [ -z "${CONFIG_PATH}" ] || [ -z "${CHECKPOINT_PATH}" ] || [ -z "${OUTPUT_JSON
       CHECKPOINT_PATH=${CHECKPOINT_PATH:-results/studies/pmv_kirchner_comparison/kirchner_1v/checkpoints/config_comparison_kirchner_1v_latest.pt}
       OUTPUT_JSON=${OUTPUT_JSON:-results/studies/pmv_kirchner_comparison/kirchner_1v/eval_robustness_suite.json}
       ;;
+    base_math)
+      CONFIG_PATH=${CONFIG_PATH:-pmv/configs/experiments/config_comparison_kirchner_1v_src.yaml}
+      CHECKPOINT_PATH=""
+      OUTPUT_JSON=${OUTPUT_JSON:-results/studies/pmv_kirchner_comparison/base_model_math/eval_core.json}
+      NO_CHECKPOINT=1
+      ;;
+    base_zebra)
+      CONFIG_PATH=${CONFIG_PATH:-pmv/configs/experiments/config_comparison_kirchner_1v_src.yaml}
+      CHECKPOINT_PATH=""
+      OUTPUT_JSON=${OUTPUT_JSON:-results/studies/pmv_kirchner_comparison/base_model_zebra/eval_core.json}
+      NO_CHECKPOINT=1
+      ;;
     *)
-      echo "Unknown EXPERIMENT='${EXPERIMENT}'. Use ours_3v, ours_1v, kirchner_1v_src, kirchner_1v_cgc, kirchner_1v_goodhart, or set CONFIG_PATH/CHECKPOINT_PATH/OUTPUT_JSON." >&2
+      echo "Unknown EXPERIMENT='${EXPERIMENT}'. Use ours_3v, ours_1v, kirchner_1v_src, kirchner_1v_cgc, kirchner_1v_goodhart, base_math, base_zebra, or set CONFIG_PATH/CHECKPOINT_PATH/OUTPUT_JSON." >&2
       exit 1
       ;;
   esac
@@ -68,6 +81,7 @@ VERIFIER_DECISION_THRESHOLD=${VERIFIER_DECISION_THRESHOLD:-0.5}
 FOOL_THRESHOLD=${FOOL_THRESHOLD:-0.5}
 SEED=${SEED:-0}
 DATASET=${DATASET:-math}
+ZEBRA_MAX_SIZE=${ZEBRA_MAX_SIZE:-4*4}
 SNEAKY_REWARD_INCORRECT_PENALTY=${SNEAKY_REWARD_INCORRECT_PENALTY:-2.0}
 SNEAKY_REWARD_SNEAKY_TEMPERATURE=${SNEAKY_REWARD_SNEAKY_TEMPERATURE:-1.0}
 SNEAKY_REWARD_SUCCESS_INCORRECT_RATE=${SNEAKY_REWARD_SUCCESS_INCORRECT_RATE:-0.95}
@@ -86,6 +100,20 @@ SAVE_PROBE_RECORDS=${SAVE_PROBE_RECORDS:-1}
 EVAL_PROFILE=${EVAL_PROFILE:-full}
 EVAL_STAGE=${EVAL_STAGE:-full}
 BASE_RESULT_PATH=${BASE_RESULT_PATH:-}
+
+if [ "${EXPERIMENT}" = "base_math" ]; then
+  if [ "${EVAL_STAGE}" = "full" ]; then
+    EVAL_STAGE="core"
+  fi
+fi
+if [ "${EXPERIMENT}" = "base_zebra" ]; then
+  if [ "${DATASET}" = "math" ]; then
+    DATASET="zebra"
+  fi
+  if [ "${EVAL_STAGE}" = "full" ]; then
+    EVAL_STAGE="core"
+  fi
+fi
 
 case "${EVAL_PROFILE}" in
   full)
@@ -171,10 +199,12 @@ if [ ! -f "${CONFIG_PATH}" ]; then
   echo "Hint: REPO_ROOT should be the parent directory that contains pmv/." >&2
   exit 1
 fi
-if [ ! -f "${CHECKPOINT_PATH}" ]; then
-  echo "FAILED: checkpoint not found: ${CHECKPOINT_PATH}" >&2
-  echo "Hint: run training first or override CHECKPOINT_PATH." >&2
-  exit 1
+if [ "${NO_CHECKPOINT}" != "1" ]; then
+  if [ ! -f "${CHECKPOINT_PATH}" ]; then
+    echo "FAILED: checkpoint not found: ${CHECKPOINT_PATH}" >&2
+    echo "Hint: run training first or override CHECKPOINT_PATH." >&2
+    exit 1
+  fi
 fi
 if ! python3 -u -m pmv.evaluation -h >/dev/null 2>&1; then
   echo "FAILED: cannot import pmv.evaluation from REPO_ROOT=${REPO_ROOT}" >&2
@@ -202,7 +232,11 @@ echo "Experiment: ${EXPERIMENT}"
 echo "Eval profile: ${EVAL_PROFILE}"
 echo "Eval stage: ${EVAL_STAGE}"
 echo "Config: ${CONFIG_PATH}"
-echo "Checkpoint: ${CHECKPOINT_PATH}"
+if [ "${NO_CHECKPOINT}" = "1" ]; then
+  echo "Checkpoint: <none> (base model / no fine-tuning)"
+else
+  echo "Checkpoint: ${CHECKPOINT_PATH}"
+fi
 echo "Output: ${OUTPUT_JSON}"
 if [ -n "${BASE_RESULT_PATH}" ]; then
   echo "Base result: ${BASE_RESULT_PATH}"
@@ -213,6 +247,12 @@ fi
 echo ""
 
 EXTRA_ARGS=()
+CHECKPOINT_ARGS=()
+if [ "${NO_CHECKPOINT}" = "1" ]; then
+  EXTRA_ARGS+=("--disable-auto-checkpoint")
+else
+  CHECKPOINT_ARGS+=("--checkpoint" "${CHECKPOINT_PATH}")
+fi
 if [ "${SKIP_ADVERSARIAL}" = "1" ]; then
   EXTRA_ARGS+=("--skip-adversarial")
 fi
@@ -259,11 +299,14 @@ if [ "${BESTOFN_ENABLE}" = "1" ]; then
     fi
   fi
 fi
+if [ "${DATASET}" = "zebra" ]; then
+  EXTRA_ARGS+=("--zebra-max-size" "${ZEBRA_MAX_SIZE}")
+fi
 
 # shellcheck disable=SC2086
 python3 -u -m pmv.evaluation \
   "${CONFIG_PATH}" \
-  --checkpoint "${CHECKPOINT_PATH}" \
+  "${CHECKPOINT_ARGS[@]}" \
   --output "${OUTPUT_JSON}" \
   --probe-episodes "${PROBE_EPISODES}" \
   --attack-episodes "${ATTACK_EPISODES}" \
