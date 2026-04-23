@@ -20,6 +20,40 @@ REPO_ROOT=${REPO_ROOT:-/dccstor/principled_ai/users/saranyaibm2/PMV}
 EXPERIMENT=${EXPERIMENT:-ours_3v}
 CONFIG_PATH=${CONFIG_PATH:-}
 
+normalize_repo_root() {
+  if [ -d "${REPO_ROOT}/pmv" ]; then
+    return
+  fi
+  if [ "$(basename "${REPO_ROOT}")" = "pmv" ] && [ -f "${REPO_ROOT}/main.py" ]; then
+    REPO_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
+  fi
+}
+
+run_module_check_or_die() {
+  local module="$1"
+  if python3 -c "import importlib; importlib.import_module('${module}')" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "FAILED: python module import check failed for '${module}'" >&2
+  echo "REPO_ROOT=${REPO_ROOT}" >&2
+  echo "PWD=$(pwd)" >&2
+  echo "python3=$(command -v python3)" >&2
+  echo "python3_version=$(python3 -V 2>&1)" >&2
+  echo "PYTHONPATH=${PYTHONPATH:-<unset>}" >&2
+  echo "Directory snapshot:" >&2
+  ls -la >&2 || true
+  if [ -d pmv ]; then
+    echo "pmv/ snapshot:" >&2
+    ls -la pmv >&2 || true
+  fi
+  echo "Traceback from import check follows:" >&2
+  python3 -c "import importlib; importlib.import_module('${module}')" || true
+  exit 1
+}
+
+normalize_repo_root
+
 if [ -z "${CONFIG_PATH}" ]; then
   case "${EXPERIMENT}" in
     ours_3v)
@@ -61,11 +95,7 @@ if [ ! -f "${CONFIG_PATH}" ]; then
   echo "Hint: REPO_ROOT should be the parent directory that contains pmv/." >&2
   exit 1
 fi
-if ! python3 -u -m pmv.main -h >/dev/null 2>&1; then
-  echo "FAILED: cannot import pmv.main from REPO_ROOT=${REPO_ROOT}" >&2
-  echo "Hint: REPO_ROOT must point to the directory that contains pmv/." >&2
-  exit 1
-fi
+run_module_check_or_die "pmv.main"
 
 python3 -u -m pmv.main "${CONFIG_PATH}"
 

@@ -23,6 +23,40 @@ CHECKPOINT_PATH=${CHECKPOINT_PATH:-}
 OUTPUT_JSON=${OUTPUT_JSON:-}
 NO_CHECKPOINT=${NO_CHECKPOINT:-0}
 
+normalize_repo_root() {
+  if [ -d "${REPO_ROOT}/pmv" ]; then
+    return
+  fi
+  if [ "$(basename "${REPO_ROOT}")" = "pmv" ] && [ -f "${REPO_ROOT}/main.py" ]; then
+    REPO_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
+  fi
+}
+
+run_module_check_or_die() {
+  local module="$1"
+  if python3 -c "import importlib; importlib.import_module('${module}')" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "FAILED: python module import check failed for '${module}'" >&2
+  echo "REPO_ROOT=${REPO_ROOT}" >&2
+  echo "PWD=$(pwd)" >&2
+  echo "python3=$(command -v python3)" >&2
+  echo "python3_version=$(python3 -V 2>&1)" >&2
+  echo "PYTHONPATH=${PYTHONPATH:-<unset>}" >&2
+  echo "Directory snapshot:" >&2
+  ls -la >&2 || true
+  if [ -d pmv ]; then
+    echo "pmv/ snapshot:" >&2
+    ls -la pmv >&2 || true
+  fi
+  echo "Traceback from import check follows:" >&2
+  python3 -c "import importlib; importlib.import_module('${module}')" || true
+  exit 1
+}
+
+normalize_repo_root
+
 if [ -z "${CONFIG_PATH}" ] || [ -z "${OUTPUT_JSON}" ] || { [ "${NO_CHECKPOINT}" != "1" ] && [ -z "${CHECKPOINT_PATH}" ]; }; then
   case "${EXPERIMENT}" in
     ours_3v)
@@ -206,11 +240,7 @@ if [ "${NO_CHECKPOINT}" != "1" ]; then
     exit 1
   fi
 fi
-if ! python3 -u -m pmv.evaluation -h >/dev/null 2>&1; then
-  echo "FAILED: cannot import pmv.evaluation from REPO_ROOT=${REPO_ROOT}" >&2
-  echo "Hint: REPO_ROOT must point to the directory that contains pmv/." >&2
-  exit 1
-fi
+run_module_check_or_die "pmv.evaluation"
 
 STAGE_ARGS=(--eval-stage "${EVAL_STAGE}")
 if [ "${EVAL_STAGE}" = "kirchner" ] || [ "${EVAL_STAGE}" = "bestofn" ]; then
