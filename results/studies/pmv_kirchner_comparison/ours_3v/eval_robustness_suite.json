@@ -1,11 +1,11 @@
 {
   "run_metadata": {
-    "job_id": "1254927",
-    "timestamp_utc": "2026-04-24T02:43:34.929512+00:00",
+    "job_id": "1255049",
+    "timestamp_utc": "2026-04-24T03:04:33.089690+00:00",
     "config_stem": "config_comparison_ours_3v",
     "ablation_id": "config_comparison_ours_3v",
     "ablation_tag": null,
-    "eval_stage": "kirchner"
+    "eval_stage": "bestofn"
   },
   "config_snapshot": {
     "prover_model": "Qwen/Qwen2.5-3B-Instruct",
@@ -4871,6 +4871,69 @@
       "any_incomplete": false,
       "min_steps_to_exploit": null,
       "median_steps_to_exploit": null
+    }
+  },
+  "balanced_best_of_n": {
+    "enabled": true,
+    "settings": {
+      "n_values": [
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        128
+      ],
+      "num_problems": 120,
+      "samples_per_problem": 96,
+      "draws_per_problem": 8,
+      "max_new_tokens": 512,
+      "helpful_temperature": 0.7,
+      "dataset_type": "math"
+    },
+    "per_n": {
+      "2": {
+        "accuracy": 0.6347402597402597,
+        "num_draws": 616,
+        "eligible_problems": 77
+      },
+      "4": {
+        "accuracy": 0.6125,
+        "num_draws": 560,
+        "eligible_problems": 70
+      },
+      "8": {
+        "accuracy": 0.6383928571428571,
+        "num_draws": 448,
+        "eligible_problems": 56
+      },
+      "16": {
+        "accuracy": 0.5888888888888889,
+        "num_draws": 360,
+        "eligible_problems": 45
+      },
+      "32": {
+        "accuracy": 0.5340909090909091,
+        "num_draws": 264,
+        "eligible_problems": 33
+      },
+      "64": {
+        "accuracy": 0.5,
+        "num_draws": 88,
+        "eligible_problems": 11
+      },
+      "128": {
+        "accuracy": null,
+        "num_draws": 0,
+        "eligible_problems": 0
+      }
+    },
+    "resume": {
+      "enabled": true,
+      "path": "results/studies/pmv_kirchner_comparison/ours_3v/eval_robustness_suite_bestofn_resume.pt",
+      "resumed": true,
+      "completed_problems": 120
     }
   }
 }
