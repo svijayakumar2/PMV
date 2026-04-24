@@ -1,7 +1,7 @@
 {
   "run_metadata": {
-    "job_id": "1237658",
-    "timestamp_utc": "2026-04-23T15:40:36.904371+00:00",
+    "job_id": "1254930",
+    "timestamp_utc": "2026-04-24T02:48:32.018115+00:00",
     "config_stem": "config_comparison_ours_1v",
     "ablation_id": "config_comparison_ours_1v",
     "ablation_tag": null,
@@ -4457,7 +4457,7 @@
           "enabled": true,
           "checkpoint_path": "results/studies/pmv_kirchner_comparison/ours_1v/eval_robustness_suite_kirchner_resume/kirchner_attack_affine_resume.pt",
           "resumed": true,
-          "start_updates_done": 6000
+          "start_updates_done": 8000
         }
       }
     },
