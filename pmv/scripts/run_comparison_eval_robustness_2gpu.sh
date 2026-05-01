@@ -32,6 +32,14 @@ normalize_repo_root() {
   fi
 }
 
+prepare_python_import_path() {
+  if [ -n "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
+  else
+    export PYTHONPATH="${REPO_ROOT}"
+  fi
+}
+
 run_module_check_or_die() {
   local module="$1"
   if python3 -c "import importlib; importlib.import_module('${module}')" >/dev/null 2>&1; then
@@ -51,11 +59,23 @@ run_module_check_or_die() {
     ls -la pmv >&2 || true
   fi
   echo "Traceback from import check follows:" >&2
-  python3 -c "import importlib; importlib.import_module('${module}')" || true
+  python3 - <<PY || true
+import importlib
+import sys
+import traceback
+
+print("sys.path head:", sys.path[:8])
+try:
+    mod = importlib.import_module("${module}")
+    print("resolved module path:", getattr(mod, "__file__", "<namespace>"))
+except Exception:
+    traceback.print_exc()
+PY
   exit 1
 }
 
 normalize_repo_root
+prepare_python_import_path
 
 if [ -z "${CONFIG_PATH}" ] || [ -z "${OUTPUT_JSON}" ] || { [ "${NO_CHECKPOINT}" != "1" ] && [ -z "${CHECKPOINT_PATH}" ]; }; then
   case "${EXPERIMENT}" in
